@@ -12,16 +12,203 @@
 
 \section{Baseline — Ground Truth}
 
-% TODO — RICHIEDE ARTIFACT: artifacts/scenario1/
-%   console-output.txt, windbg-stack-k.txt, windbg-sp-dump.txt,
-%   systeminformer-stack.png
+Questo scenario stabilisce il \emph{ground truth}: \texttt{SecretFunction} viene
+invocata direttamente, senza alcuna manipolazione dello stack. L'obiettivo è
+documentare come appare una chiamata legittima ai vari strumenti di analisi,
+fornendo il termine di paragone per tutti gli scenari successivi.
 
 \subsection{Meccanismo}
+
+La catena di chiamata è integralmente prodotta dal compilatore seguendo la
+convenzione ARM64 Windows:
+
+\begin{enumerate}
+  \item \texttt{main()} invoca \texttt{TestNormalExecution()}, che MSVC con
+        ottimizzazione \texttt{/O2} \emph{inlina} direttamente nel corpo di
+        \texttt{main}.
+  \item Il codice inlinato esegue \texttt{BL SecretFunction}: l'istruzione
+        salva l'indirizzo di ritorno nel registro \texttt{x30} (LR) e trasferisce
+        il controllo.
+  \item Il prologo di \texttt{SecretFunction} costruisce il proprio frame:
+        decrementa SP e salva i registri callee-saved (tra cui \texttt{x29} e
+        \texttt{x30}) nello stack.
+  \item All'interno di \texttt{SecretFunction}, \texttt{CaptureStackBackTrace}
+        risale la catena \texttt{x29}/\texttt{x30} per produrre il backtrace
+        visibile in console.
+\end{enumerate}
+
+In questo scenario la catena \texttt{x29}/\texttt{x30} è integra, SP è
+all'interno dei limiti TEB, e ogni funzione possiede un record valido in
+\texttt{.pdata}: tutte le condizioni per uno stack walk corretto sono soddisfatte.
+
 \subsection{Codice Rilevante}
+
+\lstinputlisting[language=C, caption={Chiamata diretta a \texttt{SecretFunction} da \texttt{TestNormalExecution} (inlinata in \texttt{main} da MSVC \texttt{/O2})}, label={lst:sc1-call}]{listings/sc1-call-site.c}
+
 \subsection{Output del Compilatore ARM64}
+
+Il breakpoint WinDbg è posizionato all'indirizzo \texttt{0x00007FF7\,1DFEB810},
+prima che il prologo venga eseguito. La prima istruzione catturata è:
+
+\lstinputlisting[language=ARM64, caption={Prima istruzione del prologo di \texttt{SecretFunction} catturata da WinDbg}, label={lst:sc1-prologue}]{listings/sc1-prologue.asm}
+
+L'istruzione \texttt{stp x19, x20, [sp, \#-0x60]!} usa l'indirizzamento
+\emph{pre-index}: SP viene decrementato di \texttt{0x60} (96 byte, la dimensione
+del frame) e i registri \texttt{x19}/\texttt{x20} sono salvati al nuovo top dello
+stack. Le istruzioni successive del prologo (non catturate in questo dump, poiché
+il breakpoint è all'ingresso) salveranno \texttt{x29} (FP) e \texttt{x30} (LR) a
+un offset fisso, e imposteranno \texttt{x29 = SP} per ancorare la frame pointer
+chain.
+
+Il record \texttt{RUNTIME\_FUNCTION} associato a \texttt{SecretFunction} nel
+segmento \texttt{.pdata} descrive questi unwind codes, consentendo a
+\texttt{RtlVirtualUnwind} di ricostruire lo stato dei registri precedente senza
+eseguire il codice al contrario.
+
 \subsection{Stack in Memoria}
+
+Al momento del breakpoint (prima dell'esecuzione del prologo), SP vale
+\texttt{0x00000007\,0D6FFCC0}. Il dump delle 16 quadword successive mostra
+che il top dello stack contiene prevalentemente zeri: \texttt{SecretFunction}
+non ha ancora scritto il proprio frame.
+
+\begin{lstlisting}[caption={Output di \texttt{dq sp L10} al breakpoint su \texttt{SecretFunction} (prologo non ancora eseguito)}, label={lst:sc1-spdump}]
+00000007`0d6ffcc0  00000000`00000000 00000000`00000000
+00000007`0d6ffcd0  00000006`40d891f6 00000000`016e3600
+00000007`0d6ffce0  00000000`00000000 00000000`00000000
+00000007`0d6ffcf0  00000000`00000000 00001000`0000000c
+00000007`0d6ffd00  00000000`00010000 00007fff`fffeffff
+00000007`0d6ffd10  00000000`00000003 00000000`00000002
+00000007`0d6ffd20  00000000`00010000 00007ff7`1e09b118
+00000007`0d6ffd30  00000176`d5106970 00000176`d511a170
+\end{lstlisting}
+
+I frame della catena, estratti dall'output di \texttt{k}, occupano le seguenti
+aree di stack (Tabella~\ref{tab:sc1-frames}):
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Frame & Child-SP & Funzione \\
+\midrule
+0 & \texttt{0x00000007\,0D6FFCC0} & \texttt{SecretFunction} \\
+1 & (inline) & \texttt{TestNormalExecution+0x70} \\
+2 & \texttt{0x00000007\,0D6FFCC0} & \texttt{main+0x260} \\
+3 & (inline) & \texttt{invoke\_main} \\
+4 & \texttt{0x00000007\,0D6FFD70} & \texttt{\_\_scrt\_common\_main\_seh} \\
+5 & (inline) & \texttt{\_\_scrt\_common\_main} \\
+6 & \texttt{0x00000007\,0D6FFDB0} & \texttt{mainCRTStartup} \\
+7 & \texttt{0x00000007\,0D6FFDC0} & \texttt{BaseThreadInitThunk} \\
+8 & \texttt{0x00000007\,0D6FFDD0} & \texttt{RtlUserThreadStart} \\
+\bottomrule
+\end{tabular}
+\caption{Frame chain al breakpoint su \texttt{SecretFunction} (Scenario 1).
+         I frame con Child-SP identico a quello di \texttt{SecretFunction}
+         (\texttt{0x00000007\,0D6FFCC0}) sono funzioni inlinate in \texttt{main}
+         e non possiedono un proprio record di frame stack.}
+\label{tab:sc1-frames}
+\end{table}
+
+I limiti dello stack del thread principale, letti dal TEB tramite il registro
+\texttt{x18}, sono:
+
+\begin{itemize}
+  \item \textbf{StackBase} (\texttt{x18+0x08}): \texttt{0x00000007\,0D700000} —
+        indirizzo più alto, top iniziale dello stack.
+  \item \textbf{StackLimit} (\texttt{x18+0x10}): \texttt{0x00000007\,0D6FB000} —
+        limite inferiore della memoria committed (20~KB committed su 1~MB riservati).
+  \item \textbf{DeallocationStack} (TEB\texttt{+0x1478}):
+        \texttt{0x00000007\,0D600000} — base della riserva totale.
+\end{itemize}
+
+SP corrente (\texttt{0x00000007\,0D6FFCC0}) è ampiamente all'interno
+dell'intervallo \texttt{[StackLimit, StackBase]}, condizione necessaria perché
+\texttt{RtlCaptureStackBackTrace} consideri lo stack valido.
+
 \subsection{Evidenze Raccolte}
+
+\begin{lstlisting}[caption={Output di \texttt{k} in WinDbg al breakpoint su \texttt{SecretFunction} (Scenario 1 — Baseline)}, label={lst:sc1-k}]
+ # Child-SP          RetAddr           Call Site
+00 00000007`0d6ffcc0 00007ff7`1dfece00 stack_spoof!SecretFunction
+01 (Inline Function) -------- -------- stack_spoof!TestNormalExecution+0x70
+02 00000007`0d6ffcc0 00007ff7`1dfedc24 stack_spoof!main+0x260
+03 (Inline Function) -------- -------- stack_spoof!invoke_main+0x24
+04 00000007`0d6ffd70 00007ff7`1dfee124 stack_spoof!__scrt_common_main_seh+0x11c
+05 (Inline Function) -------- -------- stack_spoof!__scrt_common_main+0x8
+06 00000007`0d6ffdb0 00007fff`4a098740 stack_spoof!mainCRTStartup+0x14
+07 00000007`0d6ffdc0 00007fff`4ac843e4 KERNEL32!BaseThreadInitThunk+0x40
+08 00000007`0d6ffdd0 00000000`00000000 ntdll!RtlUserThreadStart+0x44
+\end{lstlisting}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario1/systeminformer-stack.png}
+  \caption{System Informer — stack del thread principale con WinDbg in pausa
+           su \texttt{SecretFunction} (Scenario 1). Le righe evidenziate in giallo
+           indicano funzioni inlinate prive di frame proprio.}
+  \label{fig:sc1-si}
+\end{figure}
+
+\paragraph{Confronto tra strumenti.}
+La Tabella~\ref{tab:sc1-tools} mostra come tre diversi stack walker producano
+risultati differenti sullo stesso stack legittimo.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lp{2.8cm}p{7cm}}
+\toprule
+Strumento & Frame visibili & Note \\
+\midrule
+\texttt{CaptureStackBackTrace} & 4 &
+  Salta \texttt{main}, \texttt{TestNormalExecution} e l'intera catena CRT
+  inline. Percorre solo la catena \texttt{x29}/LR; le funzioni inlinate non
+  hanno frame proprio e non compaiono. \\
+WinDbg \texttt{k} & 9 &
+  Vista completa: usa i record \texttt{.pdata} per unwind virtuale. Risolve
+  le funzioni inlinate come frame logici senza proprio Child-SP. Ground truth. \\
+System Informer & 8 &
+  Mostra le funzioni inlinate (evidenziate in giallo). \texttt{RtlUserThreadStart}
+  appare due volte (artefatto del walker ibrido che combina catena FP e
+  \texttt{.pdata}). \\
+\bottomrule
+\end{tabular}
+\caption{Confronto dei risultati di tre stack walker sul medesimo stack legittimo
+         (Scenario 1 — Baseline). La discrepanza è già presente prima di qualsiasi
+         spoofing, e sarà ampliata nei scenari successivi.}
+\label{tab:sc1-tools}
+\end{table}
+
 \subsection{Perché lo Stack Walker Vede Tutto}
+
+Nello scenario Baseline, le tre condizioni necessarie per uno stack walk corretto
+sono tutte soddisfatte:
+
+\begin{enumerate}
+  \item \textbf{Catena \texttt{x29}/\texttt{x30} integra.}
+        Ogni funzione non-leaf salva LR nello stack nel proprio prologo e
+        ripristina \texttt{x29} (FP) in modo che punti al frame precedente.
+        \texttt{RtlCaptureStackBackTrace} può risalire la catena senza
+        incontrare discontinuità.
+
+  \item \textbf{Record \texttt{.pdata} presente per ogni funzione.}
+        \texttt{SecretFunction} è dichiarata \texttt{\_\_declspec(noinline)},
+        quindi MSVC emette un record \texttt{RUNTIME\_FUNCTION} completo con
+        i propri unwind codes. WinDbg utilizza questo record per eseguire
+        l'unwind virtuale tramite \texttt{RtlVirtualUnwind}, indipendentemente
+        dallo stato del registro \texttt{x29}.
+
+  \item \textbf{SP all'interno dei limiti TEB.}
+        SP (\texttt{0x00000007\,0D6FFCC0}) appartiene all'intervallo
+        \texttt{[StackLimit, StackBase]} = \texttt{[0x00000007\,0D6FB000,}
+        \texttt{0x00000007\,0D700000]}. Windows considera lo stack pointer
+        valido: nessuna anomalia rilevabile a livello di memoria.
+\end{enumerate}
+
+Questo scenario sarà il termine di confronto per tutti quelli successivi: ogni
+tecnica di spoofing agisce su almeno una di queste tre condizioni, introducendo
+una discontinuità che inganna i tool di analisi user-mode pur restando
+(parzialmente) rilevabile a livello kernel.
 
 % ── 2.2 Single-Frame Spoofing ─────────────────────────────────────────────────
 
