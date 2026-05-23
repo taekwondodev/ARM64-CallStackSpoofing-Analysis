@@ -51,8 +51,9 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-# Piano operativo (non versionato)
+# File di contesto sessione (non versionati)
 piano-claude-code.md
+context-claude.md
 
 # LaTeX build artifacts
 docs/*.aux
