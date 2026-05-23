@@ -1,0 +1,32 @@
+\chapter{Analisi Difensiva}
+
+\section{Perché Windows Defender Non Rileva}
+
+% Hook user-mode su ntdll.dll
+% Al momento del hook lo stack è già spoofato
+% Defender legge la versione falsificata → blind
+
+\section{Sysmon come Secondo Livello}
+
+% ETW Microsoft-Windows-Threat-Intelligence (kernel-level)
+% Non bypassabile con hook user-mode
+% EID 1 (Process Create) e EID 10 (Process Access) con CallTrace
+
+\section{Evidenze Sysmon per Ogni Scenario}
+
+% TODO — RICHIEDE ARTIFACT: sysmon-events da scenario4 e scenario5
+% Confronto CallTrace normale vs spoofato per ogni scenario
+
+\section{Regola di Detection}
+
+% Sigma rule:
+%   EID 1 + CallTrace contiene UNKNOWN(0x0000000000000000) → stack pivot
+% Discussione FPR (false positive rate)
+
+% TODO — inserire regola Sigma da docs/listings/sigma-stack-pivot.yml
+
+\section{Come si Blocca Davvero}
+
+% Kernel-level stack walking tramite ETW TI
+% Protected Processes (PPL)
+% Limitazioni pratiche dei controlli user-mode

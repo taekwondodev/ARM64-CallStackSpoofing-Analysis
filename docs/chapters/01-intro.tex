@@ -1,0 +1,37 @@
+\chapter{Introduzione: ARM64 vs x86 — Gestione della Memoria di Processo}
+
+\section{Layout della Memoria di Processo su Windows}
+
+% TODO — da scrivere dopo raccolta artifact scenario 1 (Baseline)
+% Coprire: stack, heap, moduli, TEB; indirizzi tipici su Win11 ARM64
+
+\section{Calling Convention ARM64 vs x86\_64}
+
+% Registri argomento: x0–x7 (ARM64) vs rcx/rdx/r8/r9 (x86_64)
+% Caller-saved vs callee-saved
+% Allineamento SP a 16 byte — obbligatorio su ARM64
+
+\section{La Catena x29/x30}
+
+% Prologo compilatore C: stp x29, x30, [sp, #-N]!
+% Cosa finisce in memoria, come si attraversa per stack walking
+% Riferimento diretto: sezione 2.1 (Baseline dump WinDbg)
+
+\section{ARM64 vs x86: Differenze Fondamentali}
+
+% Istruzioni a 4 byte fissi → ogni return address valido è multiplo di 4
+% Niente RET da 1 byte
+% LR è registro (x30), non sullo stack fino al prologo
+
+\section{Strutture \texttt{.pdata} e \texttt{.xdata}}
+
+% RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData
+% Unwinding e stack walking via RtlVirtualUnwind
+% Return address fuori da .pdata = anomalia rilevabile
+% Riferimento: sezione 2.2 (Single-Frame Spoofing)
+
+\section{Il TEB come Guardia dello Stack}
+
+% StackBase in x18+0x08, StackLimit in x18+0x10
+% Windows usa questi per validare SP durante stack walking
+% Chiave per capire lo Stack Pivoting (sezione 2.4)

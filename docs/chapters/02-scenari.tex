@@ -1,0 +1,78 @@
+\chapter{Analisi Offensiva: i 5 Scenari}
+
+% Struttura uniforme per ogni scenario:
+%   1. Meccanismo
+%   2. Codice rilevante (lstlisting C + ASM)
+%   3. Output compilatore — prologo ARM64, record .pdata (WinDbg: !pdata, .fnent)
+%   4. Stack in memoria prima/dopo (dq sp, frame chain)
+%   5. Evidenze raccolte (WinDbg k, System Informer, console)
+%   6. Perché funziona (riferimento Cap. 1)
+
+% ── 2.1 Baseline ──────────────────────────────────────────────────────────────
+
+\section{Baseline — Ground Truth}
+
+% TODO — RICHIEDE ARTIFACT: artifacts/scenario1/
+%   console-output.txt, windbg-stack-k.txt, windbg-sp-dump.txt,
+%   systeminformer-stack.png
+
+\subsection{Meccanismo}
+\subsection{Codice Rilevante}
+\subsection{Output del Compilatore ARM64}
+\subsection{Stack in Memoria}
+\subsection{Evidenze Raccolte}
+\subsection{Perché lo Stack Walker Vede Tutto}
+
+% ── 2.2 Single-Frame Spoofing ─────────────────────────────────────────────────
+
+\section{Single-Frame Spoofing}
+
+% TODO — RICHIEDE ARTIFACT: artifacts/scenario2/
+
+\subsection{Meccanismo}
+\subsection{Codice Rilevante}
+\subsection{Output del Compilatore ARM64}
+\subsection{Stack in Memoria}
+\subsection{Evidenze Raccolte}
+\subsection{Perché Funziona: Gadget Valido in \texttt{.pdata}}
+
+% ── 2.3 Multi-Frame Recursion ─────────────────────────────────────────────────
+
+\section{Multi-Frame Recursion}
+
+% TODO — RICHIEDE ARTIFACT: artifacts/scenario3/
+
+\subsection{Meccanismo}
+\subsection{Codice Rilevante}
+\subsection{Output del Compilatore ARM64}
+\subsection{Stack in Memoria}
+\subsection{Evidenze Raccolte}
+\subsection{Perché i Frame del Helper Rimangono Visibili}
+
+% ── 2.4 Stack Pivoting ────────────────────────────────────────────────────────
+
+\section{Stack Pivoting}
+
+% TODO — RICHIEDE ARTIFACT: artifacts/scenario4/
+%   + sysmon-events.evtx, sysmon-events.csv
+
+\subsection{Meccanismo}
+\subsection{Codice Rilevante}
+\subsection{Output del Compilatore ARM64}
+\subsection{Stack in Memoria}
+\subsection{Evidenze Raccolte}
+\subsection{Perché \texttt{RtlCaptureStackBackTrace} si Ferma}
+
+% ── 2.5 Spoofed Process Launch ────────────────────────────────────────────────
+
+\section{Spoofed Process Launch}
+
+% TODO — RICHIEDE ARTIFACT: artifacts/scenario5/
+%   + sysmon-events.evtx, sysmon-events.csv
+
+\subsection{Meccanismo}
+\subsection{Codice Rilevante}
+\subsection{Output del Compilatore ARM64}
+\subsection{Stack in Memoria}
+\subsection{Evidenze Raccolte}
+\subsection{Significato per un EDR}

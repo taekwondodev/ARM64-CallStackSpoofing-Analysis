@@ -1,0 +1,67 @@
+\documentclass[a4paper,12pt]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+% ── Listings ──────────────────────────────────────────────────────────────────
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  tabsize=4,
+  showstringspaces=false,
+  captionpos=b,
+}
+
+\lstdefinelanguage{ARM64}{
+  morekeywords={stp,ldp,sub,add,mov,bl,ret,str,ldr,blr,b,cbz,cbnz,adrp,
+                and,orr,eor,lsl,lsr,asr,cmp,bne,beq,blt,bge,bhi,blo},
+  keywordstyle=\color{blue}\bfseries,
+  sensitive=false,
+  morecomment=[l]{;},
+  morecomment=[l]{//},
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red!70!black},
+}
+
+% ── Metadata ──────────────────────────────────────────────────────────────────
+
+\title{%
+  \textbf{ARM64 Call Stack Spoofing}\\[0.5em]
+  \large Analisi Offensiva e Difensiva su Windows 11 ARM64\\[1.5em]
+  \normalsize Laboratorio di Cybersecurity\\[0.3em]
+  Corso di Laurea Magistrale in Informatica\\
+  Università degli Studi di Salerno\\[0.3em]
+  A.A.\ 2025/2026%
+}
+\author{D. Galdiero}
+\date{\today}
+
+% ── Document ──────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\input{chapters/01-intro}
+\input{chapters/02-scenari}
+\input{chapters/03-difensiva}
+\input{chapters/04-conclusioni}
+
+\bibliographystyle{plain}
+\bibliography{biblio}
+
+\end{document}
