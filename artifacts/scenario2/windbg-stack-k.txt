@@ -1,0 +1,9 @@
+ # Child-SP          RetAddr               Call Site
+00 0000006a`8ecffa50 00007ff7`af051430     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
+01 0000006a`8ecffa50 00000000`00000000     stack_spoof!SpoofCallStack+0x50
+
+Notes:
+- ntdll.dll base (this run): 0x00007fff`2e550000
+- stack_spoof.exe base (this run): 0x00007ff7`af040000
+- RetAddr of frame 01 is null -- secondary stack allocation in SpoofCallStack
+  (sub sp, sp, #0x30) is not described in .pdata, breaking WinDbg virtual unwind.
