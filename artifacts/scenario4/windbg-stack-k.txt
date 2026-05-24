@@ -1,0 +1,4 @@
+WARNING: Stack pointer is outside the normal stack bounds. Stack unwinding can be inaccurate.
+ # Child-SP          RetAddr               Call Site
+00 0000028d`fa63ffe0 00007ff6`ea8b1594     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
+01 0000028d`fa63ffe0 00000000`00000000     stack_spoof!ExecuteWithFakeFrame+0x54
