@@ -1,37 +1,304 @@
-\chapter{Introduzione: ARM64 vs x86 — Gestione della Memoria di Processo}
+\chapter{Fondamenti ARM64 su Windows}
+\label{ch:intro}
+
+Questo capitolo fornisce il quadro teorico necessario per interpretare i cinque
+scenari del Capitolo~2. L'attenzione è concentrata sugli aspetti dell'architettura
+ARM64 e delle strutture Windows che influenzano direttamente il call stack spoofing:
+la calling convention, la catena di frame pointer, il segmento \texttt{.pdata} e
+il Thread Environment Block come guardia di validazione dello stack.
+
+% ── 1.1 Layout della Memoria di Processo su Windows ──────────────────────────
 
 \section{Layout della Memoria di Processo su Windows}
 
-% TODO — da scrivere dopo raccolta artifact scenario 1 (Baseline)
-% Coprire: stack, heap, moduli, TEB; indirizzi tipici su Win11 ARM64
+Un processo Windows su piattaforma ARM64 dispone di uno spazio di indirizzi
+virtuali a 48 bit: i 128~TB dello spazio utente occupano l'intervallo
+\texttt{0x0000000000000000}--\texttt{0x00007FFFFFFFFFFF}. All'interno di questo
+spazio, il loader mappa le regioni principali illustrate in
+Tabella~\ref{tab:mem-layout}.
 
-\section{Calling Convention ARM64 vs x86\_64}
+\begin{table}[h]
+\centering
+\begin{tabular}{lp{9cm}}
+\toprule
+Regione & Contenuto e caratteristiche \\
+\midrule
+Stack del thread   & Cresce verso indirizzi decrescenti. Dimensione di default 1~MB
+                     (espandibile). Allocata dal kernel; i limiti sono registrati
+                     nel TEB (\texttt{StackBase}, \texttt{StackLimit}). \\
+Heap               & Allocazioni dinamiche via \texttt{HeapAlloc} /
+                     \texttt{VirtualAlloc}. Più heap possono coesistere; tipo
+                     \texttt{MEM\_PRIVATE}. \\
+Moduli (\texttt{.text})   & Codice eseguibile e DLL mappati in sola lettura.
+                     Contengono i segmenti \texttt{.pdata} e \texttt{.xdata}
+                     per l'unwinding delle eccezioni. \\
+TEB / PEB          & Strutture per-thread e per-processo mappate dal kernel.
+                     Su ARM64 il registro \texttt{x18} punta al TEB corrente. \\
+\bottomrule
+\end{tabular}
+\caption{Principali regioni della memoria di processo su Windows 11 ARM64.}
+\label{tab:mem-layout}
+\end{table}
 
-% Registri argomento: x0–x7 (ARM64) vs rcx/rdx/r8/r9 (x86_64)
-% Caller-saved vs callee-saved
-% Allineamento SP a 16 byte — obbligatorio su ARM64
+ASLR (Address Space Layout Randomization) è attivo per default su Windows 11:
+la base di ogni modulo cambia ad ogni run. Nello Scenario~1 (Baseline), ad
+esempio, \texttt{ntdll.dll} è mappata a \texttt{0x00007FFF4ABB0000} e
+\texttt{stack\_spoof.exe} a \texttt{0x00007FF71DFD0000}; in esecuzioni
+successive entrambi i valori differiscono. I \emph{relativi} (RVA) restano
+invece costanti: \texttt{SecretFunction} è sempre a \texttt{base + 0x1B810}
+e \texttt{LaunchNotepad} sempre a \texttt{base + 0x1B130}.
 
-\section{La Catena x29/x30}
+% ── 1.2 Calling Convention ARM64 su Windows ──────────────────────────────────
 
-% Prologo compilatore C: stp x29, x30, [sp, #-N]!
-% Cosa finisce in memoria, come si attraversa per stack walking
-% Riferimento diretto: sezione 2.1 (Baseline dump WinDbg)
+\section{Calling Convention ARM64 su Windows}
 
-\section{ARM64 vs x86: Differenze Fondamentali}
+La Windows ARM64 ABI (Application Binary Interface) differisce significativamente
+dalla Microsoft x86\_64 ABI \cite{msarm64abi}. La Tabella~\ref{tab:abi-compare}
+ne sintetizza le differenze rilevanti per l'analisi dello stack.
 
-% Istruzioni a 4 byte fissi → ogni return address valido è multiplo di 4
-% Niente RET da 1 byte
-% LR è registro (x30), non sullo stack fino al prologo
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Aspetto & ARM64 Windows & x86\_64 Windows \\
+\midrule
+Argomenti interi/puntatori & \texttt{x0}--\texttt{x7} & \texttt{rcx}, \texttt{rdx}, \texttt{r8}, \texttt{r9} \\
+Valore di ritorno           & \texttt{x0}              & \texttt{rax} \\
+Frame pointer               & \texttt{x29}             & \texttt{rbp} (opzionale) \\
+Link register               & \texttt{x30} (registro)  & indirizzo su stack (via \texttt{CALL}) \\
+TEB user-mode               & \texttt{x18} (riservato) & \texttt{GS:[0x30]} \\
+Allineamento SP             & 16 byte obbligatorio     & 16 byte obbligatorio \\
+Dimensione istruzione       & 4 byte fissi             & 1--15 byte variabile \\
+\midrule
+\multicolumn{3}{l}{\emph{Registri callee-saved (non-volatile)}} \\
+\midrule
+                            & \texttt{x19}--\texttt{x28}, \texttt{x29}, \texttt{SP} &
+                              \texttt{rbx}, \texttt{rbp}, \texttt{rdi}, \texttt{rsi}, \texttt{r12}--\texttt{r15} \\
+\midrule
+\multicolumn{3}{l}{\emph{Registro x30 (LR) — semantica ``Both''}} \\
+\midrule
+                            & \multicolumn{2}{p{10cm}}{x30 è \emph{volatile} dal punto di vista del caller
+                              (distrutto da qualsiasi \texttt{BL}/\texttt{BLR}), ma il callee è responsabile
+                              di salvarlo prima di eseguire nested calls. Non appartiene ai registri
+                              non-volatile, ma è il callee — non il caller — a doverlo preservare.} \\
+\bottomrule
+\end{tabular}
+\caption{Confronto tra la Windows ARM64 ABI e la Microsoft x86\_64 ABI
+         per gli aspetti rilevanti all'analisi dello stack \cite{msarm64abi}.}
+\label{tab:abi-compare}
+\end{table}
+
+Il punto di divergenza più rilevante per il call stack spoofing è il
+\textbf{link register}: su x86\_64, l'istruzione \texttt{CALL} deposita
+automaticamente l'indirizzo di ritorno in cima allo stack prima di trasferire
+il controllo; su ARM64, l'istruzione \texttt{BL} (\emph{Branch with Link})
+salva l'indirizzo di ritorno nel registro \texttt{x30} (LR) senza toccare
+lo stack. Il valore di \texttt{x30} viene scritto nello stack \emph{solo} dal
+prologo della funzione chiamata, se quella funzione effettuerà a sua volta
+altre chiamate (funzione non-leaf). Una funzione leaf che non chiama nessun'altra
+funzione può operare senza mai salvare \texttt{x30}.
+
+Questa separazione tra il momento della chiamata e il momento del salvataggio
+del return address è la proprietà architetturale che rende possibile la
+sostituzione di LR con un gadget \emph{dopo} il ritorno al chiamante, come
+sfruttato in Scenari~2 e~3.
+
+% ── 1.3 La Catena x29/x30 ────────────────────────────────────────────────────
+
+\section{La Catena \texttt{x29}/\texttt{x30}}
+
+Ogni funzione non-leaf costruisce il proprio frame stack seguendo uno schema
+uniforme imposto dal compilatore. Il prologo canonico ARM64 emesso da MSVC
+per una funzione con frame di dimensione $N$ è:
+
+\begin{lstlisting}[language=ARM64, caption={Prologo canonico ARM64 Windows: salvataggio di FP e LR, costruzione del frame pointer}, label={lst:intro-prolog}]
+stp  x29, x30, [sp, #-N]!   ; decrementa SP di N, salva {FP, LR}
+mov  x29, sp                 ; x29 = nuovo FP (top del frame corrente)
+\end{lstlisting}
+
+L'istruzione \texttt{stp} con modalità \emph{pre-index} (\texttt{!}) esegue
+le due operazioni atomicamente: SP viene decrementato di $N$ byte (il frame
+size, multiplo di 16), e la coppia \texttt{\{x29, x30\}} viene scritta ai
+nuovi indirizzi \texttt{[SP+0]} e \texttt{[SP+8]}. L'istruzione successiva
+imposta \texttt{x29 = SP}, ancorandolo al top del frame appena costruito.
+
+Al termine dell'esecuzione del prologo, la memoria attorno a SP forma la
+struttura mostrata in Tabella~\ref{tab:frame-layout}.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+Offset da SP & Registro salvato & Significato \\
+\midrule
+\texttt{[SP+0]} & \texttt{x29} (FP precedente) & puntatore al frame del chiamante \\
+\texttt{[SP+8]} & \texttt{x30} (LR)            & indirizzo di ritorno al chiamante \\
+\texttt{[SP+16]} -- \texttt{[SP+N-1]} & altri callee-saved & \texttt{x19}--\texttt{x28}, variabili locali \\
+\bottomrule
+\end{tabular}
+\caption{Layout del frame stack ARM64 dopo l'esecuzione del prologo canonico.}
+\label{tab:frame-layout}
+\end{table}
+
+La catena di frame pointer si forma perché ogni \texttt{x29} punta alla
+posizione \texttt{[SP+0]} del frame precedente, che contiene a sua volta il
+\texttt{x29} del frame ancora precedente. Un walker che segua questa catena
+risale l'intera call stack leggendo alternativamente il frame pointer e il
+return address salvati a ogni livello. In Scenario~1 (Baseline), questa catena
+è integra dalla funzione più profonda fino al CRT entry point, come verificato
+dall'output \texttt{k} di WinDbg (Listato~\ref{lst:sc1-spdump}).
+
+Il prologo reale di \texttt{SecretFunction} nello Scenario~1 inizia con:
+
+\begin{lstlisting}[language=ARM64, caption={Prima istruzione del prologo di \texttt{SecretFunction}
+catturata da WinDbg al breakpoint (Scenario~1)}, label={lst:intro-secfn}]
+stp  x19, x20, [sp, #-0x60]!
+\end{lstlisting}
+
+In questo caso MSVC ha scelto di salvare \texttt{x19}/\texttt{x20} prima di
+\texttt{x29}/\texttt{x30}: i registri callee-saved vengono salvati in un ordine
+che dipende dall'allocazione del registro da parte del compilatore, ma la coppia
+\texttt{x29}/\texttt{x30} è sempre salvata dal prologo affinché la frame pointer
+chain sia tracciabile.
+
+% ── 1.4 ARM64 vs x86_64: Differenze Fondamentali ─────────────────────────────
+
+\section{ARM64 vs x86\_64: Differenze per il Call Stack Spoofing}
+
+Quattro proprietà architetturali di ARM64 influenzano direttamente le tecniche
+di call stack spoofing rispetto all'equivalente x86\_64.
+
+\paragraph{Istruzioni a 4 byte fissi.}
+Ogni istruzione ARM64 occupa esattamente 4 byte, allineata a 4 byte. Ne consegue
+che ogni indirizzo di ritorno valido è un multiplo di 4. In x86\_64, dove le
+istruzioni hanno lunghezza variabile da 1 a 15 byte, un attaccante può scegliere
+gadget che puntino a offset arbitrari all'interno di una funzione. Su ARM64 i
+gadget validi sono esclusivamente agli indirizzi di inizio istruzione, riducendo
+(ma non eliminando) la superficie di selezione.
+
+\paragraph{Assenza della \texttt{RET} a 1 byte.}
+In x86\_64, la singola byte \texttt{0xC3} (\texttt{RET}) è sufficiente come
+gadget per mettere fine a una ROP chain. Su ARM64 l'istruzione equivalente è
+\texttt{RET} (alias di \texttt{BR x30}), encodificata come \texttt{0xD65F03C0}:
+4 byte, non divisibile, sempre allineata. I gadget ARM64 devono essere scelti
+tra istruzioni reali, non tra sequenze di byte casuali.
+
+\paragraph{LR come registro, non come valore sullo stack.}
+Su x86\_64, al momento dell'istruzione \texttt{CALL}, il return address è già
+in cima allo stack: un attaccante con scrittura arbitraria nello stack può
+sovrascrivere immediatamente il valore. Su ARM64, \texttt{x30} è un registro;
+viene scritto nello stack solo nel prologo della funzione chiamata. L'attacco
+deve quindi agire \emph{dopo} il prologo — modificando il valore già salvato
+— oppure, come negli Scenari~2 e~3, costruire un frame falso che presenti un
+LR controllato dall'attaccante al momento dello stack walk.
+
+\paragraph{Registro \texttt{x18} riservato al TEB.}
+Su Windows ARM64, il registro \texttt{x18} è riservato dal sistema operativo
+e punta sempre al Thread Environment Block (TEB) del thread corrente. Il codice
+kernel e user-mode che necessita di \texttt{StackBase} o \texttt{StackLimit}
+lo recupera direttamente da \texttt{x18} senza passare per una system call,
+rendendo la validazione di SP a basso costo. Le implicazioni per il rilevamento
+dello stack pivot sono discusse nella Sezione~\ref{sec:teb}.
+
+% ── 1.5 Strutture .pdata e .xdata ─────────────────────────────────────────────
 
 \section{Strutture \texttt{.pdata} e \texttt{.xdata}}
 
-% RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData
-% Unwinding e stack walking via RtlVirtualUnwind
-% Return address fuori da .pdata = anomalia rilevabile
-% Riferimento: sezione 2.2 (Single-Frame Spoofing)
+Windows richiede che ogni funzione non-leaf di un modulo PE sia descritta da
+un record \texttt{RUNTIME\_FUNCTION} nel segmento \texttt{.pdata} \cite{mspdata}.
+La struttura contiene tre campi a 32 bit, espressi come RVA (Relative Virtual
+Address) rispetto alla base del modulo:
+
+\begin{lstlisting}[caption={Struttura \texttt{RUNTIME\_FUNCTION} in \texttt{.pdata} (ARM64)},
+label={lst:runtime-function}]
+typedef struct _RUNTIME_FUNCTION {
+    DWORD BeginAddress;   /* RVA inizio funzione */
+    DWORD EndAddress;     /* RVA fine funzione (escluso) */
+    DWORD UnwindData;     /* RVA del record UNWIND_INFO in .xdata */
+} RUNTIME_FUNCTION;
+\end{lstlisting}
+
+Il segmento \texttt{.xdata}, puntato da \texttt{UnwindData}, contiene gli
+\emph{unwind codes}: istruzioni che descrivono, in ordine inverso, ogni
+modifica a SP e ai registri callee-saved effettuata dal prologo. La funzione
+\texttt{RtlVirtualUnwind} dell'API Windows utilizza questi codici per riportare
+i registri allo stato che avevano prima della chiamata alla funzione, senza
+dover eseguire l'epilogo: è il meccanismo su cui si basa il walker
+\texttt{.pdata} di WinDbg e il runtime delle eccezioni C++.
+
+Il processo di stack walking tramite \texttt{.pdata} segue i passi mostrati
+in Tabella~\ref{tab:pdata-walk}.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{cp{10cm}}
+\toprule
+Passo & Operazione \\
+\midrule
+1 & Dato PC corrente, cerca in \texttt{.pdata} il \texttt{RUNTIME\_FUNCTION}
+    il cui intervallo \texttt{[BeginAddress, EndAddress)} lo contenga. \\
+2 & Se trovato, chiama \texttt{RtlVirtualUnwind} con il record: i registri
+    callee-saved e SP vengono ripristinati allo stato del chiamante. \\
+3 & Il nuovo PC è il return address ripristinato. Torna al passo~1. \\
+4 & Se non trovato (PC fuori da tutti i record), il walker si ferma: il
+    return address non è recuperabile. \\
+\bottomrule
+\end{tabular}
+\caption{Algoritmo del walker \texttt{.pdata} impiegato da WinDbg e dal runtime Windows.}
+\label{tab:pdata-walk}
+\end{table}
+
+Il passo~4 è il punto critico per gli Scenari~2 e~3: \texttt{SpoofCallStack}
+contiene un'istruzione \texttt{sub sp, sp, \#0x30} fuori dal prologo canonico,
+non coperta da alcun record \texttt{RUNTIME\_FUNCTION}. Quando il walker
+raggiunge quel PC, la ricerca in \texttt{.pdata} fallisce e la catena viene
+troncata, producendo il RetAddr nullo osservato nell'output \texttt{k} di WinDbg.
+Il gadget ntdll scelto come LR falso \emph{è} invece coperto da un record
+valido — è codice di sistema — e viene attraversato correttamente, comparendo
+come frame intermedio in \texttt{CaptureStackBackTrace}.
+
+% ── 1.6 Il TEB come Guardia dello Stack ──────────────────────────────────────
 
 \section{Il TEB come Guardia dello Stack}
+\label{sec:teb}
 
-% StackBase in x18+0x08, StackLimit in x18+0x10
-% Windows usa questi per validare SP durante stack walking
-% Chiave per capire lo Stack Pivoting (sezione 2.4)
+Il Thread Environment Block (TEB) è una struttura kernel allocata per ogni
+thread attivo e mappata nello spazio di indirizzi user-mode. Su ARM64 Windows
+il registro \texttt{x18} contiene sempre il suo indirizzo base; i due campi
+rilevanti per la validazione dello stack sono accessibili a costo zero
+\cite{winternals7}:
+
+\begin{lstlisting}[language=ARM64, caption={Accesso a \texttt{StackBase} e \texttt{StackLimit} dal TEB su ARM64 Windows},
+label={lst:teb-access}]
+ldr  x0, [x18, #0x08]   ; x0 = TEB.StackBase  (indirizzo massimo stack)
+ldr  x1, [x18, #0x10]   ; x1 = TEB.StackLimit (indirizzo minimo stack)
+\end{lstlisting}
+
+La validazione eseguita da \texttt{RtlCaptureStackBackTrace} prima di
+attraversare ogni frame è:
+
+\begin{equation}
+\texttt{TEB.StackLimit} \leq \texttt{SP} < \texttt{TEB.StackBase}
+\label{eq:spcheck2}
+\end{equation}
+
+Se la condizione non è soddisfatta il walker restituisce zero frame
+\emph{immediatamente}, senza produrre un backtrace parziale. Nello
+Scenario~1, al breakpoint su \texttt{SecretFunction}, SP vale
+\texttt{0x000000070D6FFCC0} e il TEB del thread riporta
+\texttt{StackBase = 0x000000070D700000}, \texttt{StackLimit = 0x000000070D700000 - 0x100000}:
+SP è all'interno dell'intervallo e tutti i frame sono visibili.
+
+Negli Scenari~4 e~5, \texttt{ExecuteWithFakeFrame} sposta SP su memoria
+allocata con \texttt{VirtualAlloc}, estranea all'intervallo TEB. La
+condizione~(\ref{eq:spcheck2}) è immediatamente falsa: \texttt{CaptureStackBackTrace}
+restituisce zero frame e WinDbg emette il warning
+\texttt{Stack pointer is outside the normal stack bounds}.
+
+Il TEB è una struttura \emph{scrivibile} dallo user-mode: un attaccante
+potrebbe in linea di principio aggiornare \texttt{StackBase} e
+\texttt{StackLimit} per coprire il fake stack. Questa contromisura introduce
+però una firma rilevabile a livello di tipo di allocazione: il kernel assegna
+allo stack di sistema il tipo \texttt{MEM\_STACK}, mentre una regione
+\texttt{VirtualAlloc} è di tipo \texttt{MEM\_PRIVATE}. Le implicazioni
+difensive sono analizzate nella Sezione~3.4.

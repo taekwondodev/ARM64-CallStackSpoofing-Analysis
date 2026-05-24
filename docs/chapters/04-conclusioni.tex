@@ -1,22 +1,258 @@
 \chapter{Conclusioni: Tradeoff Attaccante / Difensore}
+\label{ch:conclusioni}
 
-\section{Miglior Compromesso tra Complessità e Invisibilità}
+I cinque scenari documentati nei capitoli precedenti non sono cinque soluzioni
+alternative allo stesso problema: sono cinque punti distinti su due assi
+ortogonali — complessità di implementazione e superficie di rilevamento lasciata
+esposta. Questo capitolo analizza il problema simmetricamente: prima dal punto
+di vista dell'attaccante che deve scegliere la tecnica, poi dal punto di vista
+del difensore che deve scegliere dove investire.
 
-% Quale scenario offre il rapporto ottimale
-% Da completare dopo analisi comparativa dei 5 scenari
+% ── 4.1 Tradeoff dell'Attaccante ─────────────────────────────────────────────
 
-\section{Segnali Residui Ineliminabili}
+\section{Tradeoff dell'Attaccante: Complessità vs Invisibilità}
 
-% Anche con stack pivot perfetto: SP fuori da [StackLimit, StackBase] del TEB
-% è rilevabile a livello kernel — segnale non eliminabile in user-mode
+La Tabella~\ref{tab:attacker-tradeoff} sintetizza il rapporto costo/beneficio
+di ogni scenario dal punto di vista offensivo. I criteri di valutazione sono:
+complessità di implementazione (selezione gadget, allocazione memoria, gestione
+dello stato), e la firma residua lasciata a ciascun livello di rilevamento.
 
-\section{Rendere la Detection più Robusta}
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lp{2cm}p{2.8cm}p{2.8cm}p{2.8cm}}
+\toprule
+Scenario & Complessità & Walker user-mode & Sysmon EID~1 & SP anomalia \\
+\midrule
+1 Baseline
+  & Nessuna
+  & Catena integra visibile
+  & N/A
+  & No \\
+2 Single-Frame
+  & Bassa (1 gadget)
+  & Troncatura a 2 frame + null
+  & N/A
+  & No \\
+3 Multi-Frame
+  & Media (3 gadget, ricorsione)
+  & 10 frame strutturalmente validi
+  & N/A
+  & No \\
+4 Stack Pivot
+  & Alta (VirtualAlloc, fake frame, pivot SP)
+  & 0 frame (\texttt{CaptureStackBackTrace})
+  & N/A
+  & \textbf{Sì} \\
+5 Spoofed Launch
+  & Alta (come Sc4 + \texttt{CreateProcessW})
+  & 0 frame
+  & \texttt{ParentImage} visibile
+  & \textbf{Sì} \\
+\bottomrule
+\end{tabular}
+\caption{Tradeoff attaccante: complessità di implementazione vs firma residua.
+         ``N/A'' indica che Sysmon non registra EID~1 per scenari senza creazione
+         di processo.}
+\label{tab:attacker-tradeoff}
+\end{table}
 
-% Cosa servirebbe oltre Sysmon + ETW TI
-% Correlazione multi-evento, behavioral baselines, ecc.
+\subsection{Il Punto di Massimo Rapporto Qualità/Costo}
+
+Scenario~3 (Multi-Frame Recursion) offre il miglior compromesso per un
+attaccante che operi esclusivamente in user-mode contro un difensore dotato
+solo di strumenti user-mode. La catena prodotta da
+\texttt{CaptureStackBackTrace} — 10 frame con gadget ntdll interleaved tra
+frame reali di \texttt{RecursiveSpoofHelper} — è \emph{strutturalmente
+identica} a una legittima sequenza di callback ntdll. SP rimane all'interno
+dei limiti TEB, non esistono RetAddr nulli in posizione anomala, e i gadget
+hanno record \texttt{.pdata} validi. Nessun walker user-mode, da solo, può
+distinguere questa catena da una chiamata legittima senza conoscere la
+ground truth.
+
+Il costo aggiuntivo rispetto a Scenario~2 è la selezione di tre gadget
+compatibili (LR dei tre livelli ricorsivi) e la gestione del contesto
+\texttt{RECURSIVE\_SPOOF\_CONTEXT}. La complessità rimane gestibile.
+
+\subsection{Il Punto di Massima Evasione (con Costo)}
+
+Scenari~4 e~5 eliminano completamente il backtrace visibile a
+\texttt{CaptureStackBackTrace}, riducendo la call chain a 2 frame. Questa
+è la firma più difficile da correlare a una specifica funzione target. Il
+costo è la firma SP fuori TEB — irreducibile in user-mode — che rende la
+tecnica rilevabile da qualsiasi strumento che verifichi
+\texttt{[StackLimit, StackBase]} prima di ogni frame.
+
+Per un attaccante che controlli la narrativa del processo (ad esempio, un
+impianto la cui presenza sia già nota al difensore e classificata come
+autorizzata), la firma SP può essere accettabile. Per un attaccante che
+punta all'invisibilità totale, Scenario~3 è preferibile.
+
+% ── 4.2 Segnali Residui Ineliminabili ────────────────────────────────────────
+
+\section{Segnali Residui Ineliminabili in User-Mode}
+
+Ogni tecnica di call stack spoofing analizzata lascia almeno un segnale che
+non può essere eliminato senza uscire dallo spazio user-mode o senza
+introdurre una firma alternativa di pari visibilità.
+
+\paragraph{SP fuori \texttt{[TEB.StackLimit, TEB.StackBase]} (Scenari~4 e~5).}
+L'istruzione \texttt{mov sp, x27} in \texttt{ExecuteWithFakeFrame} trasferisce
+il controllo dello stack a memoria \texttt{VirtualAlloc}. L'unico modo per
+nascondere questa anomalia è aggiornare manualmente \texttt{TEB.StackBase} e
+\texttt{TEB.StackLimit} per coprire il fake stack. Questa scrittura nel TEB
+è legale in user-mode, ma trasforma il problema: la regione puntata da
+\texttt{TEB.StackBase} diventerebbe di tipo \texttt{MEM\_PRIVATE} invece di
+\texttt{MEM\_STACK}, sostituendo la firma SP con la firma del tipo di
+allocazione. Un attaccante non può eliminare entrambe le firme contemporaneamente
+senza privilegi kernel per modificare i descrittori di memoria.
+
+\paragraph{RetAddr nullo in posizione non terminale (Scenari~2 e~3).}
+La troncatura della catena \texttt{.pdata} produce un RetAddr
+\texttt{00000000\,00000000} prima dei frame CRT canonici
+(\texttt{BaseThreadInitThunk}, \texttt{RtlUserThreadStart}). Questo segnale
+è più sottile della firma SP: non è rilevabile da un singolo walker, ma è
+identificabile da una regola che controlli se la profondità della catena
+corrisponde alla struttura attesa per il tipo di thread. Un thread CRT legittimo
+termina sempre con i due frame CRT; una catena che termini prima con null è
+strutturalmente anomala.
+
+\paragraph{ParentImage anomalo (Scenario~5).}
+Sysmon EID~1 registra \texttt{ParentImage = stack\_spoof.exe}: la relazione
+di parentela è visibile indipendentemente dal meccanismo di invocazione.
+Questo segnale è contestuale (richiede una lista di processi autorizzati a
+creare processi di sistema), ma non è eliminabile: \texttt{NtCreateUserProcess}
+registra sempre il processo padre, e Sysmon EID~1 lo espone senza dipendere
+dallo stack del thread chiamante.
+
+% ── 4.3 Tradeoff del Difensore ────────────────────────────────────────────────
+
+\section{Tradeoff del Difensore: Copertura vs Costo}
+
+Il difensore dispone di un insieme di strumenti con coperture complementari e
+costi operativi diversi. La Tabella~\ref{tab:defender-tradeoff} valuta ogni
+strumento su due assi: scenari coperti e costo di deployment/false positive rate.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lp{3.5cm}p{2cm}p{3cm}}
+\toprule
+Strumento & Scenari rilevati & Costo & Limite principale \\
+\midrule
+Sysmon EID~1
+  & Sc5 (\texttt{ParentImage})
+  & Basso (driver esistente)
+  & Contestuale: richiede allowlist \\
+Walker user-mode (SP check)
+  & Sc4, Sc5 (SP anomalia)
+  & Basso (hook in-process)
+  & Cieco a pivot se non eseguito al momento corretto \\
+Walker user-mode (depth check)
+  & Sc2, Sc3 (null RetAddr)
+  & Medio
+  & FPR elevato senza baseline per processo \\
+Kernel-mode stack capture
+  & Sc1--5 (tutti)
+  & Alto (kernel driver)
+  & Overhead syscall; richiede firma Microsoft \\
+PAC (\texttt{/guard:signret})
+  & Sc2, Sc3 (LR falso)
+  & Nessuno a runtime (hardware); opt-in toolchain
+  & Solo binari compilati con \texttt{/guard:signret}; legacy non protetti \\
+\bottomrule
+\end{tabular}
+\caption{Tradeoff difensore: copertura degli scenari vs costo operativo.
+         FPR = false positive rate.}
+\label{tab:defender-tradeoff}
+\end{table}
+
+\subsection{La Combinazione Minima Efficace}
+
+Nessuno strumento singolo copre tutti e cinque gli scenari a costo accettabile.
+La combinazione con il miglior rapporto copertura/costo per un difensore in
+contesto enterprise è:
+
+\begin{enumerate}
+  \item \textbf{Sysmon EID~1 con allowlist} — copre Scenario~5 a costo zero
+        aggiuntivo se Sysmon è già deployato. Richiede manutenzione della lista
+        dei processi autorizzati a creare processi di sistema.
+
+  \item \textbf{SP bounds check al momento della syscall} — intercettare
+        \texttt{NtCreateUserProcess} e \texttt{NtAllocateVirtualMemory} con un
+        minifilter o callback kernel verifica la condizione~(\ref{eq:spcheck2})
+        nel contesto del thread chiamante, coprendo Scenari~4 e~5 in modo
+        deterministico.
+
+  \item \textbf{Profondità minima del backtrace} — una regola che imponga
+        almeno $N$ frame validi prima dei frame CRT rileva la troncatura di
+        Scenari~2 e~3. Il valore di $N$ deve essere calibrato per processo per
+        evitare falsi positivi su thread con catene di chiamata corte per design.
+\end{enumerate}
+
+Scenario~3 rimane il caso più difficile: la sua catena è strutturalmente valida,
+SP è in bounds, e i gadget hanno \texttt{.pdata} legittima. L'unica detection
+affidabile senza ground truth è la correlazione comportamentale: un thread che
+esegua sistematicamente chiamate a funzioni ntdll specifiche in un pattern
+interleaved è anomalo rispetto alla baseline del processo.
+
+% ── 4.4 Direzioni Future ─────────────────────────────────────────────────────
 
 \section{Direzioni Future}
 
-% Indirect syscall su ARM64
-% Kernel hooks e loro limiti
-% Evoluzione delle tecniche di spoofing oltre x29/x30
+\paragraph{Syscall indirette su ARM64.}
+Le tecniche di indirect syscall — invocare direttamente \texttt{svc \#0}
+dall'impianto invece di passare per lo stub ntdll — eliminano la dipendenza
+dai gadget ntdll e rendono irrilevante la struttura \texttt{.pdata} di
+sistema. Su x86\_64 questa tecnica è consolidata; su ARM64 Windows le
+implicazioni per i walker ETW-TI non sono ancora completamente documentate,
+in quanto il numero di syscall (\texttt{svc}) intercettabili dal provider
+ETW-TI dipende dalla versione del kernel \cite{theflink_beacons}.
+
+\paragraph{Pointer Authentication Codes (PAC) — difesa già attiva.}
+PAC (\texttt{FEAT\_PAUTH}) è deployato in modo incondizionato su Windows 11
+ARM64 sia in kernel-mode (chiave globale protetta da HyperGuard) sia in
+user-mode (chiave unica per processo, generata via \texttt{BCryptGenRandom}
+e scambiata a ogni transizione user/kernel). I binari compilati con il flag
+MSVC \texttt{/guard:signret} emettono \texttt{pacibsp} nel prologo — che
+firma il valore di \texttt{x30} con la chiave del processo — e
+\texttt{autibsp} nell'epilogo, che ne verifica l'autenticità prima del
+\texttt{ret}: un LR sostituito con un gadget produce un PAC non valido e
+un'eccezione hardware.
+
+Gli scenari di questo lavoro funzionano perché \texttt{stack\_spoof.exe} è
+compilato senza \texttt{/guard:signret}: il LR non è firmato e può essere
+sostituito senza conseguenze. La direzione futura per un attaccante è quindi
+la selezione di target che non abbiano adottato \texttt{/guard:signret}, o lo
+sviluppo di tecniche che non richiedano la sostituzione del LR (ad esempio,
+mantenere il LR reale e alterare invece i frame pointer).
+
+\paragraph{Guarded Control Stack (GCS) — direzione futura su Windows.}
+L'estensione ARM GCS (\texttt{FEAT\_GCS}, ARMv9.2) introduce uno shadow stack
+hardware non modificabile da user-mode. Al 2026, GCS è implementato nel
+kernel Linux ARM64 (patch integrate a partire dal kernel 6.7), ma non ha
+ancora un equivalente su Windows ARM64: Microsoft non ha annunciato una
+roadmap pubblica per il supporto GCS in user-mode Windows. Se e quando
+adottato, GCS fornirebbe un secondo livello indipendente da PAC: anche un
+attaccante capace di forgiare un PAC valido non potrebbe allineare lo shadow
+stack al LR falso senza privilegi kernel.
+
+\paragraph{Rilevamento comportamentale.}
+Le firme strutturali analizzate in questo lavoro (SP anomalo, null RetAddr,
+gadget interleaved) sono \emph{statiche}: descrivono lo stato del thread
+in un singolo momento. Un difensore che costruisca una baseline comportamentale
+del thread — sequenza di syscall, distribuzione dei moduli nelle catene di
+chiamata, frequenza di accessi a ntdll specifiche — può rilevare Scenario~3
+anche in assenza di firme strutturali, a costo di un sistema di analisi
+stocastica ben più complesso di una regola Sysmon.
+
+\bigskip
+\noindent
+Il risultato fondamentale di questa analisi è asimmetrico: l'attaccante può
+scegliere il punto ottimale sulla curva complessità/invisibilità in funzione
+del livello di detection del difensore; il difensore deve coprire
+l'intera curva per garantire la rilevazione di tutte le tecniche. Questa
+asimmetria si riduce solo con strumenti che operino a un livello di privilegio
+che il codice offensivo non può raggiungere: kernel-mode callback, PAC hardware
+già attivo per i binari che adottano \texttt{/guard:signret}, e in prospettiva
+GCS quando Windows ARM64 ne implementerà il supporto.

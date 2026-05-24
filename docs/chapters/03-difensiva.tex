@@ -1,32 +1,319 @@
 \chapter{Analisi Difensiva}
+\label{ch:difensiva}
 
-\section{Perché Windows Defender Non Rileva}
+Il Capitolo~2 ha documentato cinque scenari di call stack spoofing producendo,
+per ciascuno, le evidenze osservate da quattro strumenti distinti. Questo
+capitolo analizza \emph{perché} ogni strumento vede ciò che vede: individua i
+meccanismi di limite dei walker user-mode, caratterizza il contributo e i
+vincoli di Sysmon, e classifica le firme rilevabili da quelle strutturalmente
+invisibili a qualsiasi componente che operi in user-mode.
 
-% Hook user-mode su ntdll.dll
-% Al momento del hook lo stack è già spoofato
-% Defender legge la versione falsificata → blind
+% ── 3.1 Limiti dei Walker User-Mode ──────────────────────────────────────────
 
-\section{Sysmon come Secondo Livello}
+\section{Limiti dei Walker User-Mode}
 
-% ETW Microsoft-Windows-Threat-Intelligence (kernel-level)
-% Non bypassabile con hook user-mode
-% EID 1 (Process Create) e EID 10 (Process Access) con CallTrace
+I walker di stack user-mode operano sullo stesso spazio di indirizzi e con
+le stesse strutture dati che il codice offensivo può manipolare. Tre meccanismi
+di limite determinano la visibilità di ciascun walker.
 
-\section{Evidenze Sysmon per Ogni Scenario}
+\subsection{Validazione dei Limiti di Stack (SP Bounds Check)}
 
-% TODO — RICHIEDE ARTIFACT: sysmon-events da scenario4 e scenario5
-% Confronto CallTrace normale vs spoofato per ogni scenario
+\texttt{RtlCaptureStackBackTrace} — e più in generale qualsiasi walker che
+attraversi frame seguendo il registro SP — esegue una verifica esplicita prima
+di processare ogni frame:
 
-\section{Regola di Detection}
+\begin{equation}
+\texttt{TEB.StackLimit} \leq \texttt{SP} < \texttt{TEB.StackBase}
+\label{eq:spcheck}
+\end{equation}
 
-% Sigma rule:
-%   EID 1 + CallTrace contiene UNKNOWN(0x0000000000000000) → stack pivot
-% Discussione FPR (false positive rate)
+I valori \texttt{StackLimit} e \texttt{StackBase} sono scritti nel Thread
+Environment Block (TEB) dal kernel all'avvio del thread e non vengono
+aggiornati automaticamente quando il codice user-mode modifica SP. Negli
+Scenari~4 e~5, il primitivo \texttt{ExecuteWithFakeFrame} sposta SP sulla
+memoria allocata con \texttt{VirtualAlloc} tramite l'istruzione
+\texttt{mov sp, x27}: SP vale \texttt{0x0000028d\,fa63ffe0} in Scenario~4
+e \texttt{0x00000242\,f344ffe0} in Scenario~5. Entrambi gli indirizzi sono
+esterni all'intervallo TEB del rispettivo run (Sezioni~2.4 e~2.5), quindi
+la condizione~(\ref{eq:spcheck}) è immediatamente falsa: \texttt{CaptureStackBackTrace}
+restituisce zero frame.
 
-% TODO — inserire regola Sigma da docs/listings/sigma-stack-pivot.yml
+WinDbg implementa un walker \texttt{.pdata} con gestione degli errori più
+esplicita: segnala l'anomalia con il messaggio \texttt{Stack pointer is outside
+the normal stack bounds} e produce comunque i 2 frame accessibili prima del
+RetAddr nullo. Questa divergenza — zero frame per \texttt{CaptureStackBackTrace},
+2 frame con warning per WinDbg — riflette strategie di error handling diverse,
+non una differenza di visibilità strutturale.
 
-\section{Come si Blocca Davvero}
+\subsection{Integrità della Catena \texttt{x29}/\texttt{x30}}
 
-% Kernel-level stack walking tramite ETW TI
-% Protected Processes (PPL)
-% Limitazioni pratiche dei controlli user-mode
+Il walker ibrido FP-chain (impiegato da System Informer) risale la catena di
+frame pointer seguendo il registro \texttt{x29}. La catena è integra se e solo
+se ogni frame salva \texttt{x29} e \texttt{x30} in posizioni consecutive e
+imposta \texttt{x29 = SP} nel proprio prologo, come richiesto dalla Windows
+ARM64 calling convention.
+
+In Scenari~2 e~3, \texttt{SpoofCallStack} scrive un frame falso: il slot FP
+è impostato a \texttt{NULL} e il slot LR è sostituito dall'indirizzo del
+gadget ntdll. La catena si tronca al primo frame falso, producendo i 2 e 3
+frame evidenziati in giallo da System Informer (Figure~\ref{fig:sc2-si},
+\ref{fig:sc3-si}, \ref{fig:sc4-si}, \ref{fig:sc5-si}). Il walker non segnala
+alcun errore: un FP~=~0 è la condizione normale per il frame più esterno dello
+stack, indistinguibile da un frame falso troncato intenzionalmente.
+
+\subsection{Il \texttt{.pdata} Gap di \texttt{SpoofCallStack}}
+\label{sec:pdata-gap}
+
+\texttt{RtlVirtualUnwind} — il motore del walker \texttt{.pdata} usato da
+WinDbg e dal runtime Windows — ricostruisce lo stato dei registri cercando
+un record \texttt{RUNTIME\_FUNCTION} nel segmento \texttt{.pdata} per ogni
+PC incontrato. \texttt{SpoofCallStack} contiene un'istruzione
+\texttt{sub sp, sp, \#0x30} non coperta da alcun record: è un'allocazione
+secondaria che MSVC non documenta automaticamente perché eseguita fuori dal
+prologo canonico. Quando \texttt{RtlVirtualUnwind} incontra questo PC la
+ricerca in \texttt{.pdata} fallisce, il walker non trova unwind codes e
+restituisce un RetAddr nullo, troncando la catena.
+
+\texttt{CaptureStackBackTrace} non dipende esclusivamente da \texttt{.pdata}:
+risale anche la catena \texttt{x29}/\texttt{x30} e include i frame reali di
+\texttt{RecursiveSpoofHelper}, producendo i 10 frame osservati in Scenario~3.
+Il gadget ntdll — che ha un record \texttt{RUNTIME\_FUNCTION} valido essendo
+codice legittimo di sistema — viene attraversato senza errori e appare come
+frame intermedio nel backtrace.
+
+\subsection{Tabella Riassuntiva}
+
+La Tabella~\ref{tab:def-walkers} sintetizza la visibilità di ciascun walker
+per tutti e cinque gli scenari.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lp{3cm}p{2.8cm}p{2.8cm}p{2.8cm}}
+\toprule
+Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informer & Sysmon EID~1 \\
+\midrule
+1 Baseline        & 4 frame reali & 9 frame & 8 frame & N/A \\
+2 Single-Frame    & 6 frame (gadget visibile) & 2 frame + null & 2 frame gialli & N/A \\
+3 Multi-Frame     & 10 frame (gadget interleaved) & 3 frame + null & 3 frame gialli & N/A \\
+4 Stack Pivot     & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & N/A \\
+5 Spoofed Launch  & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & \texttt{ParentImage} rilevabile \\
+\bottomrule
+\end{tabular}
+\caption{Visibilità degli stack walker per tutti e cinque gli scenari.
+         N/A indica che Sysmon non produce EID~1 per scenari che non creano processi.}
+\label{tab:def-walkers}
+\end{table}
+
+% ── 3.2 Sysmon come Strumento Difensivo ──────────────────────────────────────
+
+\section{Sysmon come Strumento Difensivo}
+
+Sysmon (System Monitor) di Sysinternals opera a livello di kernel driver,
+intercettando eventi tramite il provider ETW
+\texttt{Microsoft-Windows-Threat-Intelligence} (ETW-TI). A differenza dei
+walker user-mode, Sysmon non risale la catena di frame: registra eventi
+strutturati — creazione di processi, accessi a memoria, caricamento di
+librerie — con i metadati che il kernel espone al momento dell'evento.
+
+\subsection{EID 1 — Process Create e l'Assenza di CallTrace}
+
+L'evento Sysmon EID~1 viene generato alla creazione di ogni processo. Il campo
+\texttt{ParentImage} rivela il percorso completo del processo padre, recuperato
+dal kernel tramite \texttt{PsGetProcessImageFileName}. Il campo
+\texttt{CallTrace}, invece, è \emph{assente} in EID~1: esso è disponibile
+esclusivamente in EID~10 (\texttt{ProcessAccess}, ovvero \texttt{OpenProcess}),
+dove descrive la call stack al momento dell'accesso al processo remoto.
+
+Questa distinzione è strutturalmente significativa: EID~1 registra \emph{cosa}
+è accaduto (un processo è stato creato) e \emph{chi} lo ha creato
+(\texttt{ParentImage}), ma non \emph{come} è stata invocata la syscall
+\texttt{NtCreateUserProcess}. La call stack al momento dell'invocazione — e
+quindi qualsiasi anomalia introdotta dallo stack pivot — è invisibile all'evento.
+
+\subsection{Evidenza in Scenario~5}
+
+L'artifact Sysmon registrato nella VM (Listato~\ref{lst:sc5-sysmon}) mostra
+l'evento EID~1 prodotto da \texttt{CreateProcessW} all'interno di
+\texttt{LaunchNotepad} con SP pivotato sul fake stack. Il campo
+\texttt{ParentImage = stack\_spoof.exe} è correttamente registrato: la
+relazione di parentela è visibile. Nessun campo dell'evento riporta la
+posizione di SP, la presenza di frame falsi, o il gadget ntdll usato come LR.
+
+Si osserva inoltre il comportamento specifico di Windows 11: la stringa
+\texttt{notepad.exe} nella CommandLine viene reindirizzata al Notepad
+pacchettizzato dallo Microsoft Store, producendo due eventi EID~1 separati
+(\texttt{stack\_spoof.exe} $\to$ notepad legacy $\to$ Notepad pacchettizzato).
+Questo comportamento è indipendente dallo stack spoofing e non altera l'analisi.
+
+\subsection{Limite Fondamentale: Invisibilità del Pivot}
+
+Per rilevare lo stack pivot al momento di \texttt{NtCreateUserProcess},
+sarebbe necessario un componente capace di:
+
+\begin{enumerate}
+  \item Intercettare la syscall \texttt{NtCreateUserProcess} nel contesto del
+        thread chiamante, in modalità kernel.
+  \item Leggere SP del thread da \texttt{KTHREAD.TrapFrame.Sp} e confrontarlo
+        con \texttt{TEB.StackBase} e \texttt{TEB.StackLimit}.
+  \item Eseguire uno stack walk kernel-mode, immune alle manipolazioni del
+        registro SP user-mode.
+\end{enumerate}
+
+Nessuno di questi tre passi è realizzabile da Sysmon nella sua configurazione
+attuale: il provider ETW-TI registra metadati di processo, non cattura lo
+stato dei registri del thread al momento dell'evento.
+
+% ── 3.3 Rilevabilità per Scenario ────────────────────────────────────────────
+
+\section{Rilevabilità per Scenario}
+
+\subsection{Scenario 1 — Baseline}
+
+Lo stack è completamente visibile a tutti gli strumenti. SP è all'interno
+dell'intervallo TEB, la catena \texttt{x29}/\texttt{x30} è integra e ogni
+funzione possiede un record \texttt{RUNTIME\_FUNCTION} valido in \texttt{.pdata}.
+Non esistono firme anomale: Scenario~1 definisce lo stato di riferimento
+contro cui ogni deviazione successiva deve essere misurata.
+
+\subsection{Scenario 2 — Single-Frame Spoofing}
+
+Il gadget ntdll che sostituisce LR possiede un record \texttt{.pdata} valido
+— è codice di sistema legittimo — quindi \texttt{RtlVirtualUnwind} lo
+attraversa senza errori. La firma visibile è la troncatura della catena subito
+dopo il gadget: WinDbg mostra 2 frame prima del RetAddr nullo. System Informer
+evidenzia i frame in giallo, ma non può distinguere se il gadget sia presente
+per design del programma o per spoofing.
+
+L'anomalia più sottile — l'allocazione secondaria \texttt{sub sp, sp, \#0x30}
+non documentata in \texttt{.pdata} (Sezione~\ref{sec:pdata-gap}) — è invisibile
+a qualsiasi strumento user-mode che non disponga già della ground truth della
+catena di chiamate reale.
+
+\subsection{Scenario 3 — Multi-Frame Recursion}
+
+\texttt{CaptureStackBackTrace} produce 10 frame strutturalmente plausibili:
+3 gadget ntdll interleaved con 3 frame reali di \texttt{RecursiveSpoofHelper}
+e il CRT standard (Listato~\ref{lst:sc3-cbt}). Un analista senza ground truth
+non può distinguere questa catena da una legittima sequenza di callback ntdll.
+
+Non è presente alcuna anomalia strutturale rilevabile: SP è all'interno dei
+limiti TEB, i gadget hanno record \texttt{.pdata} valido, e la catena FP
+produce frame con offset contigui. Questo scenario è il più difficile da
+rilevare in user-mode: la catena spoofata è \emph{strutturalmente identica}
+a una chiamata legittima per tutti i walker disponibili.
+
+\subsection{Scenario 4 — Stack Pivot}
+
+La firma è la più forte tra i cinque scenari: SP fuori da
+\texttt{[TEB.StackLimit, TEB.StackBase]}. Qualsiasi componente che validi SP
+prima di attraversare un frame produce immediatamente un risultato anomalo.
+WinDbg lo segnala con il warning esplicito documentato in Listato~\ref{lst:sc4-k};
+\texttt{CaptureStackBackTrace} restituisce zero frame.
+
+La contromisura ovvia — aggiornare manualmente \texttt{TEB.StackBase} e
+\texttt{TEB.StackLimit} per coprire il fake stack — è realizzabile in
+user-mode (il TEB è scrivibile) ma introduce una nuova firma: l'intervallo
+di stack punterebbe a memoria allocata con \texttt{VirtualAlloc}
+(\texttt{MEM\_PRIVATE}), invece del tipo riservato dal kernel per lo stack
+di sistema. Un EDR che verifichi il tipo di allocazione della regione puntata
+da \texttt{TEB.StackBase} rileverebbe questa discrepanza.
+
+\subsection{Scenario 5 — Spoofed Process Launch}
+
+Sysmon EID~1 rivela la relazione di parentela tramite \texttt{ParentImage},
+ma non il meccanismo di invocazione (Sezione~3.2). La firma rilevabile è la
+coppia (\texttt{ParentImage} non autorizzato, \texttt{Image} = processo di
+sistema): questa signature è contestuale e richiede conoscenza esterna del
+processo padre. Nel caso generale \texttt{stack\_spoof.exe} non differisce
+\emph{a priori} da qualsiasi eseguibile firmato che avvii processi di sistema.
+
+La firma SP fuori TEB è identica a Scenario~4 e produce lo stesso warning
+WinDbg. Nessuno strumento user-mode può rilevare il \emph{perché}
+\texttt{CreateProcessW} sia stata invocata da un fake frame.
+
+% ── 3.4 Firma Rilevabile vs Non Rilevabile ────────────────────────────────────
+
+\section{Firma Rilevabile e Non Rilevabile}
+
+\subsection{Firme Rilevabili User-Mode}
+
+\paragraph{SP fuori \texttt{[TEB.StackLimit, TEB.StackBase]} (Scenari~4 e~5).}
+Questa è la firma più forte e più affidabile tra quelle osservate.
+Qualsiasi walker che implementi la condizione~(\ref{eq:spcheck}) produce un
+risultato anomalo deterministico: zero frame per \texttt{CaptureStackBackTrace},
+warning esplicito e soli 2 frame per WinDbg. Non esistono falsi positivi nella
+normale esecuzione di programmi Windows: uno stack legittimo è sempre all'interno
+dell'intervallo TEB scritto dal kernel.
+
+\paragraph{RetAddr nullo in posizione non terminale (Scenari~2 e~3).}
+Un RetAddr \texttt{00000000\,00000000} in posizione non terminale — cioè
+quando lo stack dovrebbe continuare verso il CRT — è rilevabile da un walker
+che confronti la profondità osservata con la catena attesa. WinDbg la mostra
+esplicitamente come ultimo entry prima della fine; un EDR potrebbe generare
+un alert per qualsiasi backtrace che contenga un RetAddr nullo prima dei frame
+CRT canonici (\texttt{BaseThreadInitThunk}, \texttt{RtlUserThreadStart}).
+
+\subsection{Firme Rilevabili con Euristica Contestuale}
+
+\paragraph{ParentImage anomalo in EID~1 (Scenario~5).}
+La relazione di parentela \texttt{stack\_spoof.exe} $\to$ \texttt{notepad.exe}
+è rilevabile se il processo padre è inserito in una lista di esclusione o se
+viene applicata una regola comportamentale del tipo ``processo non firmato
+lancia processo di sistema''. La firma è contestuale: richiede conoscenza
+esterna del processo padre e non è generalizzabile senza un catalogo di
+processi autorizzati a creare processi di sistema.
+
+\subsection{Firme Non Rilevabili User-Mode}
+
+\paragraph{Gadget \texttt{.pdata} valido come LR (Scenari~2 e~3).}
+Un gadget che punti a codice legittimo di ntdll con record
+\texttt{RUNTIME\_FUNCTION} valido è indistinguibile da un frame ntdll reale
+per qualsiasi walker user-mode. Non esiste una firma strutturale che permetta
+di separare un LR sostituito da un LR legittimo senza conoscere \emph{a priori}
+la catena di chiamate reale o applicare analisi statica del binario offensivo.
+
+\paragraph{Allocazione secondaria non documentata in \texttt{.pdata} (Scenari~2 e~3).}
+L'istruzione \texttt{sub sp, sp, \#0x30} fuori prologo canonico non produce
+alcuna firma osservabile autonoma: è codice valido ed eseguito correttamente.
+La sua assenza da \texttt{.pdata} causa la troncatura della catena — già
+classificata come firma rilevabile — ma non è identificabile come causa della
+troncatura senza ispezione del binario.
+
+\subsection{Verso il Rilevamento Kernel-Mode}
+
+I limiti delle sezioni precedenti derivano dalla stessa causa radice: i walker
+user-mode operano sullo stesso spazio di indirizzi e con le stesse strutture
+dati che il codice offensivo può manipolare. Un sistema di rilevamento robusto
+per tutti e cinque gli scenari richiederebbe tre capacità distinte.
+
+\textbf{Stack walk kernel-mode.} Leggere \texttt{KTHREAD.TrapFrame.Sp} al
+momento della transizione user-mode / kernel fornisce il valore di SP
+non falsificabile dal codice user-mode; risalire la catena tramite strutture
+kernel è immune alla manipolazione di \texttt{x29}/\texttt{x30}. Questo
+approccio renderebbe rilevabili le anomalie SP di Scenari~4 e~5.
+
+\textbf{Validazione del tipo di allocazione.} Verificare che la regione di
+memoria puntata da \texttt{TEB.StackBase} sia di tipo \texttt{MEM\_STACK}
+(allocata dal kernel per il thread) e non \texttt{MEM\_PRIVATE}
+(\texttt{VirtualAlloc} user-mode) costituisce una firma specifica per i pivot
+di Scenari~4 e~5, anche nel caso in cui l'attaccante aggiorni manualmente il TEB.
+
+\textbf{Pointer Authentication (PAC) e return address signing.} Per Scenari~2
+e~3 — dove la catena spoofata è strutturalmente valida per qualsiasi walker
+— la difesa hardware già disponibile su Windows 11 ARM64 è PAC
+(\texttt{FEAT\_PAUTH}). Windows 11 ARM64 deploya PAC in modo incondizionato
+sia in kernel-mode (chiave globale gestita da HyperGuard) sia in user-mode
+(chiave unica per processo, generata via \texttt{BCryptGenRandom} e scambiata
+a ogni transizione user/kernel). I binari compilati con il flag
+\texttt{/guard:signret} emettono \texttt{pacibsp} nel prologo (firma del LR
+con la chiave del processo) e \texttt{autibsp} nell'epilogo (verifica prima
+del \texttt{ret}): un LR sostituito con un gadget produce un PAC non valido
+e un'eccezione hardware al momento del ritorno.
+
+Gli scenari di questo lavoro funzionano perché \texttt{stack\_spoof.exe} è
+compilato senza \texttt{/guard:signret}: il LR non è firmato e può essere
+sostituito liberamente. Su un binario target compilato con
+\texttt{/guard:signret}, le tecniche di Scenari~2 e~3 richiederebbero di
+forgiare un LR con PAC valido — operazione non realizzabile senza la chiave
+di processo, gestita in modo sicuro dal kernel.
