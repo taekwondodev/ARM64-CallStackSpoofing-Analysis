@@ -24,6 +24,29 @@
   captionpos=b,
 }
 
+\lstdefinestyle{cstyle}{
+  backgroundcolor=\color{yellow!6},
+  keywordstyle=\color{blue!70!black}\bfseries,
+  keywordstyle=[2]\color{teal}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{red!60!black},
+  morekeywords=[2]{DWORD,BOOL,HANDLE,LPVOID,ULONG_PTR,USHORT,DWORD64,SIZE_T,
+    WINAPI,STARTUPINFOW,PROCESS_INFORMATION,PSYMBOL_INFO,SYMBOL_INFO,
+    LARGE_INTEGER,SYSTEM_INFO,HMODULE,BYTE,WORD,VOID,PVOID,LPCSTR,LPWSTR,
+    TRUE,FALSE,NULL,MEM_COMMIT,MEM_RESERVE,PAGE_READWRITE,MEM_RELEASE,
+    __declspec,UNREFERENCED_PARAMETER},
+}
+
+\lstdefinestyle{asmstyle}{
+  backgroundcolor=\color{blue!5},
+  keywordstyle=\color{blue!80!black}\bfseries,
+  commentstyle=\color{gray}\itshape,
+}
+
+\lstdefinestyle{outstyle}{
+  backgroundcolor=\color{gray!8},
+}
+
 \lstdefinelanguage{ARM64}{
   morekeywords={stp,ldp,sub,add,mov,bl,ret,str,ldr,blr,b,cbz,cbnz,adrp,
                 and,orr,eor,lsl,lsr,asr,cmp,bne,beq,blt,bge,bhi,blo},
@@ -39,9 +62,9 @@
 
 \title{%
   \textbf{ARM64 Call Stack Spoofing}\\[0.5em]
-  \large Analisi Offensiva e Difensiva su Windows 11 ARM64\\[1.5em]
+  \large Defense Evasion contro Windows Defender su Windows 11 ARM64\\[1.5em]
   \normalsize Laboratorio di Cybersecurity\\[0.3em]
-  Corso di Laurea Magistrale in Informatica\\
+  Corso di Laurea in Tecnologie Cloud e CyberSecurity\\
   Università degli Studi di Salerno\\[0.3em]
   A.A.\ 2025/2026%
 }
@@ -56,6 +79,7 @@
 \tableofcontents
 \newpage
 
+\input{chapters/00-introduzione}
 \input{chapters/01-intro}
 \input{chapters/02-scenari}
 \input{chapters/03-difensiva}

@@ -12,14 +12,14 @@ void *fakeStackBase = VirtualAlloc(NULL, DEFAULT_STACK_SIZE,
 void *fakeStackTop = (void *)((ULONG_PTR)fakeStackBase + DEFAULT_STACK_SIZE);
 
 FAKE_FRAME_DATA fakeFrame = {
-    .fakeFp = (void *)((ULONG_PTR)fakeStackTop - 0x100),
+    .fakeFp = (void *)((ULONG_PTR)fakeStackTop - 0x100), // 256 B sotto il top: spazio per il frame falso
     .fakeLr = GetRandomGadget(&g_gadgetCache),
     .fakeSp = fakeStackTop
 };
 
 g_captureStack = FALSE;
 DWORD64 result = ExecuteWithFakeFrame(SecretFunction, &fakeFrame,
-                                      (LPVOID)0x44444444);
+                                      (LPVOID)0x44444444); // parametro dummy Sc4
 g_captureStack = TRUE;
 
 VirtualFree(fakeStackBase, 0, MEM_RELEASE);

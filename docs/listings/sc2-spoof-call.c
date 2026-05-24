@@ -11,6 +11,6 @@ void TestBasicSpoofing(void)
     DWORD64 result = SpoofCallStack(
         SecretFunction,       // target
         spoofedReturnGadget,  // fake return address (ntdll gadget)
-        (LPVOID)0x22222222,   // parameter
+        (LPVOID)0x22222222,   // parametro dummy Sc2 (Sc1 usa 0x11111111)
         &realReturn);         // receives real LR for verification
 }

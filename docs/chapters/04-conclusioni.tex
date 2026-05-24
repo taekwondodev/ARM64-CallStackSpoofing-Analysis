@@ -17,43 +17,38 @@ di ogni scenario dal punto di vista offensivo. I criteri di valutazione sono:
 complessità di implementazione (selezione gadget, allocazione memoria, gestione
 dello stato), e la firma residua lasciata a ciascun livello di rilevamento.
 
-\begin{table}[h]
+\begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{lp{2cm}p{2.8cm}p{2.8cm}p{2.8cm}}
+\begin{tabular}{lp{1.8cm}p{1.8cm}p{2.4cm}p{2.0cm}p{2.4cm}}
 \toprule
-Scenario & Complessità & Walker user-mode & Sysmon EID~1 & SP anomalia \\
+ & Sc~1 & Sc~2 & Sc~3 & Sc~4 & Sc~5 \\
 \midrule
-1 Baseline
+Complessità
   & Nessuna
-  & Catena integra visibile
-  & N/A
-  & No \\
-2 Single-Frame
   & Bassa (1 gadget)
-  & Troncatura a 2 frame + null
-  & N/A
-  & No \\
-3 Multi-Frame
   & Media (3 gadget, ricorsione)
-  & 10 frame strutturalmente validi
-  & N/A
-  & No \\
-4 Stack Pivot
-  & Alta (VirtualAlloc, fake frame, pivot SP)
-  & 0 frame (\texttt{CaptureStackBackTrace})
-  & N/A
-  & \textbf{Sì} \\
-5 Spoofed Launch
-  & Alta (come Sc4 + \texttt{CreateProcessW})
-  & 0 frame
-  & \texttt{ParentImage} visibile
-  & \textbf{Sì} \\
+  & Alta (pivot SP)
+  & Alta (pivot SP + \texttt{CreateProcessW}) \\
+\addlinespace
+Walker user-mode
+  & Catena integra
+  & 2 frame + null RetAddr
+  & 10 frame strutturali
+  & 0 frame (CBT)
+  & 0 frame \\
+\addlinespace
+Sysmon EID~1
+  & N/A & N/A & N/A & N/A
+  & \texttt{ParentImage} visibile \\
+\addlinespace
+SP anomalia
+  & No & No & No & \textbf{Sì} & \textbf{Sì} \\
 \bottomrule
 \end{tabular}
-\caption{Tradeoff attaccante: complessità di implementazione vs firma residua.
-         ``N/A'' indica che Sysmon non registra EID~1 per scenari senza creazione
-         di processo.}
+\caption{Tradeoff attaccante: complessità vs firma residua per scenario.
+         Le righe corrispondono ai criteri di valutazione; le colonne agli scenari.
+         ``N/A'' = Sysmon non registra EID~1 per scenari senza creazione di processo.}
 \label{tab:attacker-tradeoff}
 \end{table}
 
@@ -133,7 +128,7 @@ Il difensore dispone di un insieme di strumenti con coperture complementari e
 costi operativi diversi. La Tabella~\ref{tab:defender-tradeoff} valuta ogni
 strumento su due assi: scenari coperti e costo di deployment/false positive rate.
 
-\begin{table}[h]
+\begin{table}[htbp]
 \centering
 \small
 \begin{tabular}{lp{3.5cm}p{2cm}p{3cm}}
@@ -196,63 +191,12 @@ affidabile senza ground truth è la correlazione comportamentale: un thread che
 esegua sistematicamente chiamate a funzioni ntdll specifiche in un pattern
 interleaved è anomalo rispetto alla baseline del processo.
 
-% ── 4.4 Direzioni Future ─────────────────────────────────────────────────────
-
-\section{Direzioni Future}
-
-\paragraph{Syscall indirette su ARM64.}
-Le tecniche di indirect syscall — invocare direttamente \texttt{svc \#0}
-dall'impianto invece di passare per lo stub ntdll — eliminano la dipendenza
-dai gadget ntdll e rendono irrilevante la struttura \texttt{.pdata} di
-sistema. Su x86\_64 questa tecnica è consolidata; su ARM64 Windows le
-implicazioni per i walker ETW-TI non sono ancora completamente documentate,
-in quanto il numero di syscall (\texttt{svc}) intercettabili dal provider
-ETW-TI dipende dalla versione del kernel \cite{theflink_beacons}.
-
-\paragraph{Pointer Authentication Codes (PAC) — difesa già attiva.}
-PAC (\texttt{FEAT\_PAUTH}) è deployato in modo incondizionato su Windows 11
-ARM64 sia in kernel-mode (chiave globale protetta da HyperGuard) sia in
-user-mode (chiave unica per processo, generata via \texttt{BCryptGenRandom}
-e scambiata a ogni transizione user/kernel). I binari compilati con il flag
-MSVC \texttt{/guard:signret} emettono \texttt{pacibsp} nel prologo — che
-firma il valore di \texttt{x30} con la chiave del processo — e
-\texttt{autibsp} nell'epilogo, che ne verifica l'autenticità prima del
-\texttt{ret}: un LR sostituito con un gadget produce un PAC non valido e
-un'eccezione hardware.
-
-Gli scenari di questo lavoro funzionano perché \texttt{stack\_spoof.exe} è
-compilato senza \texttt{/guard:signret}: il LR non è firmato e può essere
-sostituito senza conseguenze. La direzione futura per un attaccante è quindi
-la selezione di target che non abbiano adottato \texttt{/guard:signret}, o lo
-sviluppo di tecniche che non richiedano la sostituzione del LR (ad esempio,
-mantenere il LR reale e alterare invece i frame pointer).
-
-\paragraph{Guarded Control Stack (GCS) — direzione futura su Windows.}
-L'estensione ARM GCS (\texttt{FEAT\_GCS}, ARMv9.2) introduce uno shadow stack
-hardware non modificabile da user-mode. Al 2026, GCS è implementato nel
-kernel Linux ARM64 (patch integrate a partire dal kernel 6.7), ma non ha
-ancora un equivalente su Windows ARM64: Microsoft non ha annunciato una
-roadmap pubblica per il supporto GCS in user-mode Windows. Se e quando
-adottato, GCS fornirebbe un secondo livello indipendente da PAC: anche un
-attaccante capace di forgiare un PAC valido non potrebbe allineare lo shadow
-stack al LR falso senza privilegi kernel.
-
-\paragraph{Rilevamento comportamentale.}
-Le firme strutturali analizzate in questo lavoro (SP anomalo, null RetAddr,
-gadget interleaved) sono \emph{statiche}: descrivono lo stato del thread
-in un singolo momento. Un difensore che costruisca una baseline comportamentale
-del thread — sequenza di syscall, distribuzione dei moduli nelle catene di
-chiamata, frequenza di accessi a ntdll specifiche — può rilevare Scenario~3
-anche in assenza di firme strutturali, a costo di un sistema di analisi
-stocastica ben più complesso di una regola Sysmon.
-
 \bigskip
 \noindent
 Il risultato fondamentale di questa analisi è asimmetrico: l'attaccante può
 scegliere il punto ottimale sulla curva complessità/invisibilità in funzione
-del livello di detection del difensore; il difensore deve coprire
-l'intera curva per garantire la rilevazione di tutte le tecniche. Questa
-asimmetria si riduce solo con strumenti che operino a un livello di privilegio
-che il codice offensivo non può raggiungere: kernel-mode callback, PAC hardware
-già attivo per i binari che adottano \texttt{/guard:signret}, e in prospettiva
-GCS quando Windows ARM64 ne implementerà il supporto.
+del livello di detection del difensore; il difensore deve coprire l'intera
+curva per garantire la rilevazione di tutte le tecniche. Questa asimmetria
+si riduce solo con strumenti che operino a un livello di privilegio che il
+codice offensivo non può raggiungere: kernel-mode callback e PAC hardware
+già attivo per i binari che adottano \texttt{/guard:signret}.

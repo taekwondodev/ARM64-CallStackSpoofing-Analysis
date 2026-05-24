@@ -2,7 +2,7 @@
 void TestNormalExecution(void)
 {
     // ...
-    DWORD result = SecretFunction((LPVOID)0x11111111);
+    DWORD result = SecretFunction((LPVOID)0x11111111); // parametro dummy: identifica lo scenario nell'output
     // ...
 }
 
@@ -14,6 +14,6 @@ __declspec(noinline) DWORD WINAPI SecretFunction(LPVOID param)
     void *backtrace[12];
     USHORT frames = CaptureStackBackTrace(0, 12, backtrace, NULL);
     // ...
-    g_secretValue = value ^ 0xDEADBEEF;
+    g_secretValue = value ^ 0xDEADBEEF; // XOR con magic number: risultato riconoscibile in qualsiasi dump
     return g_secretValue;
 }

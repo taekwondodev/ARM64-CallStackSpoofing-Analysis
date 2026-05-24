@@ -1,0 +1,36 @@
+\chapter{Introduzione}
+\label{ch:introduzione}
+
+I tool di sicurezza che operano in user-mode identificano operazioni sospette
+ispezionando la \emph{call stack} al momento in cui avvengono: creazione di
+processi, allocazioni di memoria eseguibile, apertura di handle privilegiati.
+Questa ispezione risale la catena di frame pointer e return address per
+ricostruire la sequenza di chiamate che ha portato all'operazione. Se la call
+chain risultante corrisponde a funzioni di sistema legittime, l'evento è
+classificato come benigno; in caso contrario, viene segnalato come anomalo.
+
+Il \emph{call stack spoofing} è una tecnica di \emph{defense evasion} che
+sfrutta questa dipendenza: falsificando i frame pointer e i return address
+visibili agli stack walker user-mode, è possibile presentare una call chain
+apparentemente legittima anche durante operazioni sospette. L'efficacia della
+tecnica dipende dall'architettura del sistema e dai meccanismi con cui il
+sistema operativo gestisce la catena di chiamate.
+
+Un caso emblematico è il \emph{worm}: una volta ottenuta l'esecuzione su un
+sistema, deve allocare memoria eseguibile, creare processi per replicarsi e
+comunicare con l'esterno — operazioni intrisecamente sospette che i tool di
+sicurezza in user-mode ispezionano sistematicamente. Il call stack spoofing
+consente al worm di mascherare queste operazioni presentando una call chain
+apparentemente legittima, riducendo la probabilità di rilevamento senza
+modificare il comportamento funzionale.
+
+\paragraph{Struttura del documento.}
+Il Capitolo~\ref{ch:intro} introduce i fondamenti dell'architettura ARM64
+su Windows necessari per comprendere le tecniche analizzate: calling convention,
+catena \texttt{x29}/\texttt{x30}, segmento \texttt{.pdata} e Thread Environment
+Block. Il Capitolo~\ref{ch:scenari} documenta cinque scenari di call stack
+spoofing con crescente complessità, ciascuno accompagnato dalle evidenze
+raccolte con WinDbg, System Informer e Sysmon. Il Capitolo~\ref{ch:difensiva}
+analizza i limiti degli stack walker user-mode e le firme residue rilevabili.
+Il Capitolo~\ref{ch:conclusioni} sintetizza il tradeoff tra complessità
+offensiva e copertura difensiva.
