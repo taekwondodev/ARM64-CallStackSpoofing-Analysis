@@ -8,6 +8,110 @@
 %   5. Evidenze raccolte (WinDbg k, System Informer, console)
 %   6. Perché funziona (riferimento Cap. 1)
 
+% ── Introduzione al binario ───────────────────────────────────────────────────
+
+\section*{Il binario \texttt{stack\_spoof.exe}}
+
+Il binario è composto da due file sorgente: \texttt{stack\_spoof\_arm64.c}
+(logica C: funzioni bersaglio, gadget discovery, orchestrazione) e
+\texttt{stack\_spoof\_arm64.asm} (quattro stub in assembly ARM64 che
+manipolano direttamente SP, FP e LR).
+
+\paragraph{Inizializzazione in \texttt{main()}.}
+Prima di eseguire gli scenari, \texttt{main()} compie tre passi preparatori:
+
+\begin{lstlisting}[language=C, caption={Sequenza di inizializzazione e invocazione scenari in \texttt{main()}}, label={lst:main-init}]
+SymInitialize(GetCurrentProcess(), NULL, TRUE);
+CacheCallSites("ntdll.dll", &g_gadgetCache);
+
+TestNormalExecution();       /* Scenario 1: baseline        */
+TestBasicSpoofing();         /* Scenario 2: single-frame    */
+TestAdvancedSpoofing();      /* Scenario 3: multi-frame     */
+TestFakeFrameExecution();    /* Scenario 4: stack pivot     */
+TestProcessLaunchSpoofing(); /* Scenario 5: process launch  */
+\end{lstlisting}
+
+\texttt{SymInitialize} registra il gestore di simboli necessario per
+risolvere indirizzi a nome di funzione nella console.
+\texttt{CacheCallSites} scansiona il segmento \texttt{.text} di
+\texttt{ntdll.dll} alla ricerca di istruzioni \texttt{BL} e memorizza
+i return address che le seguono come gadget: indirizzi legittimi,
+coperti da record \texttt{.pdata}, che saranno usati come LR contraffatti
+nei frame falsi. Le cinque funzioni di test vengono poi invocate in sequenza.
+
+\paragraph{Funzioni bersaglio.}
+Due funzioni sono richiamate dagli scenari come destinazione delle chiamate
+manipolate.
+
+\texttt{SecretFunction} simula un'operazione sensibile: al suo interno
+chiama \texttt{CaptureStackBackTrace} e stampa il backtrace con nomi di
+simbolo, rendendo immediatamente visibile l'effetto di ogni tecnica.
+
+\begin{lstlisting}[language=C, caption={Corpo essenziale di \texttt{SecretFunction}: acquisizione e stampa del backtrace interno}, label={lst:secretfn-core}]
+__declspec(noinline) DWORD WINAPI SecretFunction(LPVOID param) {
+    void *backtrace[12];
+    USHORT frames = CaptureStackBackTrace(0, 12, backtrace, NULL);
+    /* risoluzione simboli e stampa per ogni frame */
+    g_secretValue = (DWORD)(ULONG_PTR)param ^ 0xDEADBEEF;
+    return g_secretValue;
+}
+\end{lstlisting}
+
+\texttt{LaunchNotepad} chiama \texttt{CreateProcessW} per avviare
+\texttt{notepad.exe}. È usata solo nello Scenario~5, dove l'obiettivo
+è osservare come Sysmon registra la creazione del processo in presenza
+di stack spoofing.
+
+\begin{lstlisting}[language=C, caption={Corpo essenziale di \texttt{LaunchNotepad}: avvio di \texttt{notepad.exe} tramite \texttt{CreateProcessW}}, label={lst:launchnotepad-core}]
+__declspec(noinline) BOOL WINAPI LaunchNotepad(LPVOID param) {
+    wchar_t cmd[] = L"C:\\Windows\\System32\\notepad.exe";
+    STARTUPINFOW si = {sizeof(si)};
+    PROCESS_INFORMATION pi = {0};
+    return CreateProcessW(NULL, cmd, NULL, NULL,
+                          FALSE, 0, NULL, NULL, &si, &pi);
+}
+\end{lstlisting}
+
+\paragraph{Stub assembly.}
+I quattro stub esportati verso il codice C operano direttamente sui
+registri di controllo del flusso.
+
+\texttt{SpoofCallStack} (Scenari~2 e~3) costruisce un frame falso al di
+fuori del prologo canonico: l'istruzione \texttt{sub sp, sp, \#0x30}
+non è coperta da alcun record \texttt{.pdata}, causando il troncamento
+del walker. Il gadget ntdll viene posto in \texttt{x30} come LR visibile
+agli strumenti di analisi.
+
+\begin{lstlisting}[language=ARM64, caption={Nucleo di \texttt{SpoofCallStack}: costruzione del frame falso e caricamento del gadget in LR}, label={lst:spoofcs-core}]
+sub     sp, sp, #0x30       ; frame extra NON coperto da .pdata
+str     x29, [sp, #0x20]    ; FP reale nel frame falso
+str     x20, [sp, #0x28]    ; gadget come return address visibile
+mov     x29, sp             ; ancora x29 al frame falso
+mov     x30, x20            ; gadget in LR
+blr     x19                 ; invoca target
+\end{lstlisting}
+
+\texttt{ExecuteWithFakeFrame} (Scenari~4 e~5) esegue un pivot di SP:
+abbandona lo stack di sistema e commuta su una regione allocata con
+\texttt{VirtualAlloc}, estranea all'intervallo \texttt{[StackLimit, StackBase)}
+del TEB. Questa singola istruzione rende il backtrace immediatamente
+vuoto per qualsiasi walker che esegua il controllo SP descritto nella
+Sezione~\ref{sec:teb}.
+
+\begin{lstlisting}[language=ARM64, caption={Nucleo di \texttt{ExecuteWithFakeFrame}: pivot SP e costruzione del frame sul fake stack}, label={lst:fakefr-core}]
+ldr     x27, [x22, #0x10]   ; fakeSp dalla struttura FAKE_FRAME_DATA
+mov     sp, x27             ; pivot: SP esce dall'intervallo TEB
+sub     sp, sp, #0x20
+stp     x25, x26, [sp]      ; fake FP e LR sul nuovo stack
+mov     x29, sp
+blr     x21                 ; invoca target sul fake stack
+\end{lstlisting}
+
+\texttt{GetCurrentStackPointer} e \texttt{GetCurrentFramePointer} leggono
+rispettivamente SP e \texttt{x29} in un singolo \texttt{mov}/\texttt{ret},
+fornendo al codice C i valori correnti dei registri per costruire i
+frame falsi.
+
 % ── 2.1 Baseline ──────────────────────────────────────────────────────────────
 
 \section{Baseline — Ground Truth}

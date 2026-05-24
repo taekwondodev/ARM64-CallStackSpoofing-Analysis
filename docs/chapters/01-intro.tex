@@ -302,3 +302,32 @@ però una firma rilevabile a livello di tipo di allocazione: il kernel assegna
 allo stack di sistema il tipo \texttt{MEM\_STACK}, mentre una regione
 \texttt{VirtualAlloc} è di tipo \texttt{MEM\_PRIVATE}. Le implicazioni
 difensive sono analizzate nella Sezione~3.4.
+
+% ── 1.7 Ambiente di Laboratorio ──────────────────────────────────────────────
+
+\section{Ambiente di Laboratorio}
+\label{sec:ambiente}
+
+Tutti gli scenari sono stati eseguiti su una macchina virtuale VMware Fusion
+con sistema operativo Windows 11 ARM64 (versione 25H2v2, build 26200.8037),
+2 vCPU Apple Silicon e 4~GB di RAM.
+
+Il binario \texttt{stack\_spoof.exe} è stato compilato nell'ambiente
+\emph{ARM64 Native Tools Command Prompt} di Visual Studio con i seguenti flag:
+
+\begin{lstlisting}[caption={Flag di compilazione e linking di \texttt{stack\_spoof.exe}},
+label={lst:build-flags}]
+cl.exe  /O2 /MT /Zi /EHsc /std:c++17 /W3
+armasm64  stack_spoof_arm64.asm
+link.exe  /MACHINE:ARM64 /DEBUG
+\end{lstlisting}
+
+L'assenza del flag \texttt{/guard:signret} è deliberata: il compilatore non
+emette le istruzioni \texttt{pacibsp}/\texttt{autibsp} per la firma del link
+register, lasciando \texttt{x30} non protetto da PAC. Questa condizione è
+necessaria per la riuscita degli scenari~2--5 e riflette il caso reale di
+software compilato senza hardening PAC attivo.
+
+Gli strumenti di analisi impiegati sono WinDbg (walker \texttt{.pdata} e
+breakpoint), System Informer (stack view in-process), Sysmon (event logging)
+e l'API \texttt{CaptureStackBackTrace} richiamata direttamente dal binario.
