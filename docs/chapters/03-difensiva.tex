@@ -74,12 +74,15 @@ prologo canonico. Quando \texttt{RtlVirtualUnwind} incontra questo PC la
 ricerca in \texttt{.pdata} fallisce, il walker non trova unwind codes e
 restituisce un RetAddr nullo, troncando la catena.
 
-\texttt{CaptureStackBackTrace} non dipende esclusivamente da \texttt{.pdata}:
-risale anche la catena \texttt{x29}/\texttt{x30} e include i frame reali di
-\texttt{RecursiveSpoofHelper}, producendo i 10 frame osservati in Scenario~3.
-Il gadget ntdll — che ha un record \texttt{RUNTIME\_FUNCTION} valido essendo
-codice legittimo di sistema — viene attraversato senza errori e appare come
-frame intermedio nel backtrace.
+\texttt{CaptureStackBackTrace} produce un backtrace più profondo rispetto al
+walker \texttt{.pdata} di WinDbg: in Scenario~3 restituisce 10 frame,
+includendo i frame reali di \texttt{RecursiveSpoofHelper} che il walker
+\texttt{.pdata} non raggiunge. I 10 frame osservati — gadget ntdll interleaved
+con frame di \texttt{RecursiveSpoofHelper} — sono coerenti con un walker che
+attraversa la catena dei frame pointer (\texttt{x29}) in aggiunta o in
+alternativa a \texttt{.pdata}. Il gadget ntdll, avendo un record
+\texttt{RUNTIME\_FUNCTION} valido, viene incluso nel backtrace e appare come
+frame intermedio.
 
 \subsection{Tabella Riassuntiva}
 
@@ -109,12 +112,19 @@ Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informe
 
 \section{Sysmon come Strumento Difensivo}
 
-Sysmon (System Monitor) di Sysinternals opera a livello di kernel driver,
-intercettando eventi tramite il provider ETW
-\texttt{Microsoft-Windows-Threat-Intelligence} (ETW-TI). A differenza dei
-walker user-mode, Sysmon non risale la catena di frame: registra eventi
-strutturati — creazione di processi, accessi a memoria, caricamento di
-librerie — con i metadati che il kernel espone al momento dell'evento.
+Sysmon (System Monitor) di Sysinternals opera a livello di kernel driver
+(\texttt{SysmonDrv}), registrando callback diretti nel kernel: utilizza
+\texttt{PsSetCreateProcessNotifyRoutineEx} per la creazione di processi,
+object callback (\texttt{ObjRegisterCallbacks}) per gli accessi a handle di
+processi e thread, e un minifilter driver per le operazioni su filesystem.
+I dati raccolti vengono pubblicati come eventi ETW, ma il meccanismo di
+\emph{intercezione} è basato su callback kernel, non sul provider
+\texttt{Microsoft-Windows-Threat-Intelligence} (ETW-TI): quest'ultimo è un
+provider separato impiegato da alcuni EDR per telemetria kernel, non da Sysmon.
+A differenza dei walker user-mode, Sysmon non risale la catena di frame:
+registra eventi strutturati — creazione di processi, accessi a handle,
+caricamento di librerie — con i metadati che il kernel espone al momento
+del callback.
 
 \subsection{EID 1 — Process Create e l'Assenza di CallTrace}
 
@@ -213,11 +223,15 @@ WinDbg lo segnala con il warning esplicito documentato in Listato~\ref{lst:sc4-k
 
 La contromisura ovvia — aggiornare manualmente \texttt{TEB.StackBase} e
 \texttt{TEB.StackLimit} per coprire il fake stack — è realizzabile in
-user-mode (il TEB è scrivibile) ma introduce una nuova firma: l'intervallo
-di stack punterebbe a memoria allocata con \texttt{VirtualAlloc}
-(\texttt{MEM\_PRIVATE}), invece del tipo riservato dal kernel per lo stack
-di sistema. Un EDR che verifichi il tipo di allocazione della regione puntata
-da \texttt{TEB.StackBase} rileverebbe questa discrepanza.
+user-mode (il TEB è scrivibile) ma non elimina la firma a livello kernel.
+\texttt{VirtualQuery} restituisce \texttt{MEM\_PRIVATE} (0x20000) sia per lo
+stack di sistema sia per qualsiasi regione \texttt{VirtualAlloc}: non esiste
+un tipo \texttt{MEM\_STACK} nell'API user-mode. La distinzione è però
+accessibile a un driver kernel tramite il VAD (Virtual Address Descriptor):
+le regioni di stack hanno un subtype VAD diverso dalle allocazioni private
+ordinarie, e un EDR kernel-mode che ispezionasse il VAD della regione puntata
+da \texttt{TEB.StackBase} rileverebbe che non si tratta di uno stack di
+sistema.
 
 \subsection{Scenario 5 — Spoofed Process Launch}
 
@@ -287,17 +301,24 @@ user-mode operano sullo stesso spazio di indirizzi e con le stesse strutture
 dati che il codice offensivo può manipolare. Un sistema di rilevamento robusto
 per tutti e cinque gli scenari richiederebbe tre capacità distinte.
 
-\textbf{Stack walk kernel-mode.} Leggere \texttt{KTHREAD.TrapFrame.Sp} al
-momento della transizione user-mode / kernel fornisce il valore di SP
-non falsificabile dal codice user-mode; risalire la catena tramite strutture
-kernel è immune alla manipolazione di \texttt{x29}/\texttt{x30}. Questo
-approccio renderebbe rilevabili le anomalie SP di Scenari~4 e~5.
+\textbf{Stack walk kernel-mode.} Al momento della transizione user-mode /
+kernel, il processore salva lo stato dei registri del thread nel trap frame
+(\texttt{\_KTRAP\_FRAME}), una struttura kernel non modificabile da user-mode.
+Il valore di SP catturato nel trap frame riflette la posizione reale dello
+stack al momento della syscall, indipendentemente da qualsiasi manipolazione
+user-mode. Un driver che legga SP dal trap frame e risalga la catena tramite
+strutture kernel ottiene un backtrace immune alla manipolazione di
+\texttt{x29}/\texttt{x30}: le anomalie SP di Scenari~4 e~5 sarebbero
+rilevabili in modo deterministico.
 
-\textbf{Validazione del tipo di allocazione.} Verificare che la regione di
-memoria puntata da \texttt{TEB.StackBase} sia di tipo \texttt{MEM\_STACK}
-(allocata dal kernel per il thread) e non \texttt{MEM\_PRIVATE}
-(\texttt{VirtualAlloc} user-mode) costituisce una firma specifica per i pivot
-di Scenari~4 e~5, anche nel caso in cui l'attaccante aggiorni manualmente il TEB.
+\textbf{Validazione del tipo di allocazione tramite VAD.} A livello kernel,
+ispezionare il VAD della regione puntata da \texttt{TEB.StackBase} permette
+di verificare che si tratti di uno stack di sistema e non di una regione
+\texttt{VirtualAlloc}. L'API user-mode \texttt{VirtualQuery} non distingue
+i due casi — entrambi restituiscono \texttt{MEM\_PRIVATE} — ma il VAD associa
+un subtype diverso alle regioni di stack, rendendo la distinzione accessibile
+a un driver kernel. Questa firma è specifica per i pivot di Scenari~4 e~5,
+anche se l'attaccante aggiorna manualmente il TEB.
 
 \textbf{Pointer Authentication (PAC) e return address signing.} Per Scenari~2
 e~3 — dove la catena spoofata è strutturalmente valida per qualsiasi walker
