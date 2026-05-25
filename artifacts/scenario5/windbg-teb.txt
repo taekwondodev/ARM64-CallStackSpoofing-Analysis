@@ -1,0 +1,9 @@
+stack_spoof!_NT_TIB
+   +0x000 ExceptionList    : (null)
+   +0x008 StackBase        : 0x0000009e`d6b00000 Void
+   +0x010 StackLimit       : 0x0000009e`d6afa000 Void
+   +0x018 SubSystemTib     : (null)
+   +0x020 FiberData        : 0x00000000`00001e00 Void
+   +0x020 Version          : 0x1e00
+   +0x028 ArbitraryUserPointer : (null)
+   +0x030 Self             : 0x0000009e`d680e000 _NT_TIB

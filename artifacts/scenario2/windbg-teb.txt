@@ -1,0 +1,16 @@
+dt _NT_TIB @$teb
+stack_spoof!_NT_TIB
+   +0x000 ExceptionList    : (null)
+   +0x008 StackBase        : 0x0000006a`8ed00000 Void
+   +0x010 StackLimit       : 0x0000006a`8ecfb000 Void
+   +0x018 SubSystemTib     : (null)
+   +0x020 FiberData        : 0x00000000`00001e00 Void
+   +0x020 Version          : 0x1e00
+   +0x028 ArbitraryUserPointer : (null)
+   +0x030 Self             : 0x0000006a`8ebc0000 _NT_TIB
+
+Notes:
+  StackBase - StackLimit = 0x8ed00000 - 0x8ecfb000 = 0x5000 = 20KB committed
+  StackBase - DeallocationStack = 1MB reserved (typical default)
+  SP (0x0000006a`8ecffa50) is within [StackLimit, StackBase] -- valid range
+  Compare scenario 4: fake stack SP will be OUTSIDE this range

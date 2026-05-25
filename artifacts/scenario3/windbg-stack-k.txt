@@ -1,0 +1,4 @@
+ # Child-SP          RetAddr               Call Site
+00 0000000b`1599f620 00007ff7`abf0b784     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
+01 0000000b`1599f620 00007ff7`abf01430     stack_spoof!RecursiveSpoofHelper+0x24 [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 467]
+02 0000000b`1599f640 00000000`00000000     stack_spoof!SpoofCallStack+0x50

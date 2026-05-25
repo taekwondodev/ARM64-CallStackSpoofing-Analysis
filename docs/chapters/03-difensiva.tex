@@ -1,0 +1,209 @@
+\chapter{Analisi Difensiva}
+\label{ch:difensiva}
+
+Il Capitolo~\ref{ch:scenari} ha documentato cinque scenari di call stack spoofing
+producendo, per ciascuno, le evidenze osservate da quattro strumenti distinti.
+Questo capitolo cambia prospettiva: per ogni scenario identifica la firma rilevabile,
+il meccanismo di difesa appropriato e il livello di privilegio richiesto per applicarlo.
+La sezione~\ref{sec:mapping} fornisce il mapping immediato; la sezione~\ref{sec:limiti-walker}
+sintetizza la visibilità degli strumenti evidenziando il caso limite di Scenario~3;
+la sezione~\ref{sec:mde} illustra la logica kernel-mode con cui Microsoft Defender
+for Endpoint copre l'intero spazio delle tecniche analizzate.
+
+% ── 4.1 Mapping Difensivo ─────────────────────────────────────────────────────
+
+\section{Mapping Difensivo per Scenario}
+\label{sec:mapping}
+
+La Tabella~\ref{tab:mapping-difensivo} sintetizza, per ogni scenario, la firma
+osservabile, il meccanismo di difesa corrispondente, il livello minimo richiesto
+e l'efficacia risultante. La distinzione tra \emph{rilevazione} e \emph{blocco}
+è strutturale: un componente user-mode può osservare anomalie post-hoc, ma
+l'applicazione di un'azione bloccante prima del completamento dell'operazione
+richiede che il controllo avvenga in modo sincrono nel contesto del thread,
+in kernel-mode.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lp{3.2cm}p{3.2cm}p{2.5cm}p{2cm}}
+\toprule
+Scenario & Firma chiave & Meccanismo difesa & Livello minimo & Efficacia \\
+\midrule
+1 Baseline
+  & Nessuna (ground truth)
+  & ---
+  & ---
+  & N/A \\
+2 Single-Frame
+  & Null RetAddr in posizione non terminale
+  & Stack walk con null check su catena \texttt{x29}
+  & User-mode
+  & Rilevazione \\
+3 Multi-Frame
+  & Nessuna strutturale
+  & Analisi comportamentale ML su pattern di gadget
+  & Kernel/EDR
+  & Solo EDR \\
+4 Stack Pivot
+  & SP $\notin$ \texttt{[TEB.StackLimit, TEB.StackBase]}
+  & Lettura SP da \texttt{KTHREAD.TrapFrame} vs TEB
+  & Kernel
+  & Deterministica \\
+5 Spoofed Launch
+  & SP $\notin$ TEB bounds + \texttt{ParentImage} anomalo
+  & SP da \texttt{TrapFrame} + analisi parentela
+  & Kernel
+  & Deterministica \\
+\bottomrule
+\end{tabular}
+\caption{Mapping scenario -- firma -- meccanismo di difesa -- livello richiesto.}
+\label{tab:mapping-difensivo}
+\end{table}
+
+Il pattern emergente è netto: Scenari~4 e~5 producono una firma deterministica
+(SP fuori TEB) rilevabile a qualsiasi livello, ma bloccabile in modo affidabile
+solo da kernel. Scenari~2 e~3 non producono firme strutturali deterministiche:
+Scenario~2 è rilevabile da un null check; Scenario~3 è strutturalmente
+indistinguibile da una chiamata legittima per qualsiasi walker user-mode.
+
+La distinzione tra \emph{rilevazione} e \emph{blocco} merita un chiarimento
+esplicito. Un tool user-mode che interroghi periodicamente lo stato del thread
+può osservare SP fuori TEB — ma opera in polling, non in modo sincrono rispetto
+all'esecuzione del thread bersaglio. Al momento in cui il tool rileva l'anomalia,
+l'operazione sospetta (ad esempio \texttt{CreateProcessW} in Scenario~5) potrebbe
+essere già completata: il processo figlio esiste, l'effetto è prodotto.
+
+Un callback kernel (\texttt{PsSetCreateProcessNotifyRoutineEx}) viene invece
+eseguito \emph{nel contesto del thread chiamante}, prima che il kernel completi
+la creazione del processo. In quel momento è possibile leggere
+\texttt{TrapFrame.Sp}, confrontarlo con i limiti TEB, e restituire un codice
+di errore che annulla l'intera operazione — il processo figlio non viene mai
+creato. Questa sincronia è strutturalmente irraggiungibile da user-mode: nessun
+meccanismo user-mode garantisce l'interposizione prima del completamento di una
+syscall.
+
+% ── 4.2 Visibilità degli Stack Walker ────────────────────────────────────────
+
+\section{Visibilità degli Stack Walker}
+\label{sec:limiti-walker}
+
+Il Capitolo~\ref{ch:scenari} ha documentato per ogni scenario le evidenze
+raccolte dagli strumenti. La Tabella~\ref{tab:def-walkers} sintetizza quei
+risultati in forma comparativa, evidenziando il pattern trasversale: gli
+strumenti divergono sistematicamente, e la divergenza non è casuale ma
+riflette i limiti strutturali di ciascun walker (SP bounds check,
+integrità della catena \texttt{x29}/\texttt{x30}, copertura \texttt{.pdata})
+già introdotti nel Capitolo~\ref{ch:intro}.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lp{3cm}p{2.8cm}p{2.8cm}p{2.8cm}}
+\toprule
+Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informer & Sysmon EID~1 \\
+\midrule
+1 Baseline        & 4 frame reali & 9 frame & 8 frame & N/A \\
+2 Single-Frame    & 6 frame (gadget visibile) & 2 frame + null & 2 frame gialli & N/A \\
+3 Multi-Frame     & 10 frame (gadget interleaved) & 3 frame + null & 3 frame gialli & N/A \\
+4 Stack Pivot     & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & N/A \\
+5 Spoofed Launch  & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & \texttt{ParentImage} rilevabile \\
+\bottomrule
+\end{tabular}
+\caption{Visibilità degli stack walker per tutti e cinque gli scenari.
+         N/A indica assenza di creazione di processi; Sysmon EID~1 si applica
+         esclusivamente a eventi di \texttt{CreateProcess}.}
+\label{tab:def-walkers}
+\end{table}
+
+Il dato più rilevante è Scenario~3: \texttt{CaptureStackBackTrace} restituisce
+10 frame con gadget ntdll interleaved tra frame reali di
+\texttt{RecursiveSpoofHelper}, SP rimane all'interno dei limiti TEB, e la
+catena \texttt{x29} è formalmente integra. Nessuno strumento user-mode produce
+una firma anomala — la catena spoofata è \emph{strutturalmente identica} a
+una chiamata legittima. Questo è il caso limite che nessun walker user-mode
+può risolvere senza conoscenza \emph{a priori} della call chain reale.
+
+% ── 4.3 Microsoft Defender for Endpoint ──────────────────────────────────────
+
+\section{Microsoft Defender for Endpoint: Rilevamento Kernel-Mode}
+\label{sec:mde}
+
+I limiti della sezione precedente derivano dalla stessa causa radice: i walker
+user-mode operano sullo stesso spazio di indirizzi e con le stesse strutture
+dati che il codice offensivo può manipolare. Microsoft Defender for Endpoint
+(MDE)~\cite{msmde} supera questo vincolo operando in kernel-mode attraverso un'architettura
+a più livelli che rende strutturalmente impossibile all'attaccante alterare
+i dati osservati dal sensore.
+
+\subsection{Architettura del Sensore}
+
+MDE dispone di due componenti kernel principali. \textbf{\texttt{MsSense.sys}}
+è il driver del sensore EDR: si registra come callback per gli eventi di
+creazione di processi e thread tramite \texttt{PsSetCreateProcessNotifyRoutineEx}
+e \texttt{PsSetCreateThreadNotifyRoutine}, ricevendo notifiche sincrone nel
+contesto del thread chiamante. \textbf{\texttt{WdFilter.sys}} è il minifilter
+antimalware: opera al di sotto del file system e intercetta operazioni su
+memoria eseguibile e moduli caricati.
+
+Il canale di telemetria privilegiato è il provider ETW
+\texttt{Microsoft-Windows-Threat-Intelligence} (ETW-TI). Questo provider è
+protetto: accessibile esclusivamente a processi con attributo \emph{Protected
+Process Light} (PPL), impossibile da disabilitare o filtrare da user-mode anche
+con privilegi amministrativi. ETW-TI emette eventi per le syscall
+security-rilevanti — \texttt{NtAllocateVirtualMemory},
+\texttt{NtCreateUserProcess}, \texttt{NtOpenProcess} — e include, per ciascun
+evento, la call stack catturata dal kernel nel momento dell'esecuzione.
+
+\subsection{Il Trap Frame come Fonte Autoritativa}
+
+Al momento della transizione user-mode/kernel attraverso una syscall, il
+processore ARM64 salva automaticamente lo stato completo dei registri del
+thread nella struttura \texttt{\_KTRAP\_FRAME}, allocata nello stack kernel
+del thread e non accessibile né modificabile da user-mode. Il campo
+\texttt{TrapFrame.Sp} contiene il valore esatto di SP nel momento in cui
+la syscall è stata invocata, indipendentemente da qualsiasi manipolazione
+eseguita prima della syscall stessa.
+
+MDE legge \texttt{TrapFrame.Sp} nel contesto del callback kernel e lo
+confronta con \texttt{TEB.StackBase} e \texttt{TEB.StackLimit} dello stesso
+thread. Questa verifica è strutturalmente equivalente alla condizione~(\ref{eq:spcheck2}),
+ma con una differenza critica: il valore di SP proviene dal trap frame scritto
+dall'hardware, non da strutture leggibili e sovrascrivibili in user-mode.
+L'attaccante non ha alcun meccanismo per alterare \texttt{TrapFrame.Sp}
+prima della lettura da parte del driver.
+
+\subsection{Copertura per Scenario}
+
+\paragraph{Scenari~4 e~5 — Stack Pivot.}
+Al momento della syscall \texttt{NtAllocateVirtualMemory} (allocazione del
+fake stack) e di \texttt{NtCreateUserProcess} (Scenario~5), il callback
+\texttt{MsSense.sys} legge \texttt{TrapFrame.Sp}. SP vale l'indirizzo del
+fake stack allocato con \texttt{VirtualAlloc}, esterno all'intervallo TEB.
+Il controllo è deterministico e privo di falsi negativi: nessun programma
+legittimo opera con SP fuori dai bounds TEB durante una syscall. MDE
+classifica l'evento come anomalo e blocca l'operazione.
+
+\paragraph{Scenario~2 — Single-Frame Spoofing.}
+ETW-TI cattura la call stack al momento della syscall con un walker
+kernel-mode. Il walker kernel, operando sulle strutture \texttt{KTHREAD} e
+sul VAD, percorre la catena anche in presenza del gap \texttt{.pdata} che
+tronca il walker user-mode. Il RetAddr nullo in posizione non terminale —
+prima dei frame canonici \texttt{BaseThreadInitThunk} e
+\texttt{RtlUserThreadStart} — è una firma rilevabile: \textbf{per default MDE
+genera un alert} per qualsiasi backtrace in cui un RetAddr nullo preceda i
+frame CRT attesi. Può essere configurato per bloccare l'operazione in
+automatico.
+
+\paragraph{Scenario~3 — Multi-Frame Recursion.}
+Questo scenario non produce firme strutturali deterministiche nemmeno per
+un walker kernel-mode: SP è in bounds, i gadget hanno record \texttt{.pdata}
+validi, e la catena \texttt{x29} è formalmente integra. La copertura di MDE
+si basa sul modello comportamentale ML integrato nel motore di analisi:
+il pattern di gadget ntdll interleaved con frame di una funzione ricorsiva
+non si manifesta nella normale esecuzione di software legittimo e costituisce
+una firma statistica ad alta confidenza, ma non deterministica. \textbf{Per
+default MDE genera un alert}; il blocco automatico è configurabile ma richiede
+tuning per evitare falsi positivi su software legittimo con pattern simili.
+Scenario~3 rimane il caso più sfidante per qualsiasi sistema difensivo.
+

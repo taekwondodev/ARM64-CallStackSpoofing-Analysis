@@ -1,0 +1,1033 @@
+\chapter{Analisi Offensiva: i 5 Scenari}
+\label{ch:scenari}
+
+% Struttura uniforme per ogni scenario:
+%   1. Meccanismo
+%   2. Codice rilevante (lstlisting C + ASM)
+%   3. Output compilatore — prologo ARM64, record .pdata (WinDbg: !pdata, .fnent)
+%   4. Stack in memoria prima/dopo (dq sp, frame chain)
+%   5. Evidenze raccolte (WinDbg k, System Informer, console)
+%   6. Perché funziona (riferimento Cap. 1)
+
+% ── Introduzione al binario ───────────────────────────────────────────────────
+
+\section*{Il binario \texttt{stack\_spoof.exe}}
+
+Il binario è composto da due file sorgente: \texttt{stack\_spoof\_arm64.c}
+(logica C: funzioni bersaglio, gadget discovery, orchestrazione) e
+\texttt{stack\_spoof\_arm64.asm} (quattro stub in assembly ARM64 che
+manipolano direttamente SP, FP e LR). Il binario è stato compilato ed eseguito direttamente dalla repository
+pubblica di Hagenah~\cite{hagenah2025}, senza modifiche al codice sorgente.
+
+\paragraph{Inizializzazione in \texttt{main()}.}
+Prima di eseguire gli scenari, \texttt{main()} compie due passi preparatori:
+
+\begin{lstlisting}[style=cstyle, language=C, caption={Sequenza di inizializzazione e invocazione scenari in \texttt{main()}}, label={lst:main-init}]
+SymInitialize(GetCurrentProcess(), NULL, TRUE);
+CacheCallSites("ntdll.dll", &g_gadgetCache);
+
+TestNormalExecution();       /* Scenario 1: baseline        */
+TestBasicSpoofing();         /* Scenario 2: single-frame    */
+TestAdvancedSpoofing();      /* Scenario 3: multi-frame     */
+TestFakeFrameExecution();    /* Scenario 4: stack pivot     */
+TestProcessLaunchSpoofing(); /* Scenario 5: process launch  */
+\end{lstlisting}
+
+\texttt{SymInitialize} registra il gestore di simboli necessario per
+risolvere indirizzi a nome di funzione nella console.
+\texttt{CacheCallSites} scansiona il segmento \texttt{.text} di
+\texttt{ntdll.dll} alla ricerca di istruzioni \texttt{BL} e memorizza
+i return address che le seguono come gadget: indirizzi legittimi,
+coperti da record \texttt{.pdata}, che saranno usati come LR contraffatti
+nei frame falsi. Le cinque funzioni di test vengono poi invocate in sequenza.
+
+\paragraph{Funzioni bersaglio.}
+Tutti e cinque gli scenari condividono la stessa struttura di fondo:
+si sceglie una funzione bersaglio e la si invoca attraverso un meccanismo
+di chiamata diverso, osservando come cambia la visibilità della chiamata
+agli strumenti di analisi. Le due funzioni bersaglio simulano operazioni
+tipiche del payload di un worm: \texttt{SecretFunction} esegue un'allocazione
+di memoria eseguibile e cattura internamente il proprio backtrace;
+\texttt{LaunchNotepad} crea un processo figlio tramite \texttt{CreateProcessW}.
+Gli scenari 1--4 impiegano \texttt{SecretFunction}: l'obiettivo è misurare
+come cambia il backtrace in-process al variare della tecnica di spoofing.
+Lo Scenario~5 la sostituisce con \texttt{LaunchNotepad} perché sul fake stack
+\texttt{CaptureStackBackTrace} restituirebbe comunque 0 frame --- lo stesso
+risultato di Scenario~4, senza informazioni nuove. La funzione bersaglio
+diventa quindi \texttt{CreateProcessW}: è l'operazione che genera l'evento
+Sysmon EID~1, il vettore di rilevamento specifico che Scenario~5 analizza.
+
+\paragraph{Stub assembly.}
+Manipolare direttamente SP, FP (\texttt{x29}) e LR (\texttt{x30}) da codice
+C non è possibile: il compilatore gestisce questi registri in modo trasparente,
+emette prologo ed epilogo autonomamente e non offre garanzie su quale stato
+abbiano in un punto arbitrario del codice. MSVC su ARM64 non supporta
+inline assembly, quindi non esiste modo di intercettare quella generazione.
+Scrivere gli stub in assembly puro significa \emph{uscire completamente dal
+modello del compilatore}: nessun prologo implicito, nessun salvataggio di
+registri non richiesto, nessuna riorganizzazione delle istruzioni ---
+il processore esegue esattamente e solo ciò che lo stub prescrive.
+Questo controllo preciso è il presupposto necessario per costruire frame
+falsi, commutare SP e caricare LR con valori arbitrari.
+I cinque stub esportati da \texttt{stack\_spoof\_arm64.asm} sono
+\texttt{SpoofCallStack}, \texttt{SpoofCallStackAdvanced},
+\texttt{ExecuteWithFakeFrame}, \texttt{GetCurrentStackPointer} e
+\texttt{GetCurrentFramePointer}; le funzioni di test C li invocano come
+normali chiamate. Il meccanismo specifico di ciascuno è descritto nella
+sezione dello scenario che lo impiega.
+
+% ── Strumenti e Metodologia ───────────────────────────────────────────────────
+
+\section*{Strumenti e Metodologia di Analisi}
+
+Ogni scenario è analizzato con quattro strumenti di osservazione, ciascuno con
+un meccanismo di stack walking distinto. Comprendere le differenze strutturali
+tra gli strumenti è necessario per interpretare correttamente le evidenze
+raccolte nelle sezioni seguenti.
+
+\paragraph{WinDbg.}
+Debugger di Microsoft utilizzato in modalità user-mode attach con simboli
+pubblici. Il suo walker si basa su \texttt{RtlVirtualUnwind}: legge i record
+\texttt{RUNTIME\_FUNCTION} nel segmento \texttt{.pdata} del PE per ricostruire
+virtualmente lo stato dei registri frame per frame, indipendentemente da
+\texttt{x29}. Questo approccio è più robusto della catena FP ma dipende
+dall'integrità e completezza dei metadati \texttt{.pdata}.
+
+\paragraph{System Informer.}
+Walker ibrido che combina la catena \texttt{x29}/\texttt{x30} con i record
+\texttt{.pdata}. Le righe evidenziate in giallo indicano frame che il walker
+non riesce a risolvere completamente. Nello scenario baseline corrispondono a
+funzioni \emph{inlinate} dal compilatore: non sono funzioni leaf (una funzione
+leaf possiede comunque un record \texttt{.pdata} e appare come frame distinto),
+ma funzioni il cui codice è stato fuso nel frame del chiamante, senza un record
+separato. Negli scenari di spoofing il giallo indica frame anomali o irrisolvibili.
+
+\paragraph{\texttt{CaptureStackBackTrace}.}
+Funzione Win32 invocata dall'interno di \texttt{SecretFunction}: percorre la
+catena \texttt{x29}/\texttt{x30} in user-mode senza consultare \texttt{.pdata}.
+Se un LR è stato sostituito con un gadget ntdll, lo riporta senza verificarne
+l'autenticità. L'output è visibile sulla console del binario.
+
+\paragraph{Sysmon EID~1.}
+Event ID~1 di Sysmon registra la creazione di un processo: include il campo
+\texttt{ParentImage} ma \emph{non} un campo \texttt{CallTrace}. Rilevante solo
+per lo Scenario~5.
+
+\subsection*{Comandi WinDbg}
+
+\paragraph{\texttt{bp stack\_spoof!NomeFunzione}}
+Breakpoint simbolico all'entry della funzione. In tutti gli scenari il breakpoint
+è collocato all'entry della funzione bersaglio, prima del prologo: SP non è ancora
+decrementato, ma il frame del chiamante è integro --- il momento in cui gadget
+inseriti e catena reale sono simultaneamente osservabili.
+
+\paragraph{\texttt{k}}
+Mostra la call stack del thread corrente applicando gli unwind codes dei record
+\texttt{.pdata} tramite \texttt{RtlVirtualUnwind}. Per ogni frame riporta
+\texttt{Child-SP} (SP virtuale al momento della chiamata), \texttt{RetAddr}
+(indirizzo di ritorno) e \texttt{Call Site} (simbolo risolto). Le funzioni
+inlinate compaiono come \texttt{(Inline Function)} senza un proprio \texttt{Child-SP}.
+
+\paragraph{\texttt{dq sp L10}}
+Dump di 16 quadword a partire da SP. Permette di localizzare le coppie
+\texttt{(FP, LR)} costruite dagli stub assembly e verificare la presenza dei
+gadget ntdll nello stack grezzo.
+
+\paragraph{\texttt{!pdata} / \texttt{.fnent}}
+Mostra il record \texttt{RUNTIME\_FUNCTION} associato a un indirizzo. Usato per
+verificare che il prologo documentato in \texttt{.pdata} corrisponda a quanto
+emesso dal compilatore, e per confermare la presenza o assenza di record per le
+allocazioni secondarie degli stub.
+
+% ── 2.1 Baseline ──────────────────────────────────────────────────────────────
+
+\section{Baseline — Ground Truth}
+
+Questo scenario stabilisce il \emph{ground truth}: \texttt{SecretFunction} viene
+invocata direttamente, senza alcuna manipolazione dello stack. L'obiettivo è
+documentare come appare una chiamata legittima ai vari strumenti di analisi,
+fornendo il termine di paragone per tutti gli scenari successivi.
+
+\subsection{Meccanismo}
+
+La catena di chiamata è integralmente prodotta dal compilatore seguendo la
+convenzione ARM64 Windows:
+
+\begin{enumerate}
+  \item \texttt{main()} invoca \texttt{TestNormalExecution()}, che MSVC con
+        ottimizzazione \texttt{/O2} \emph{inlina} direttamente nel corpo di
+        \texttt{main}.
+  \item Il codice inlinato esegue \texttt{BL SecretFunction}: l'istruzione
+        salva l'indirizzo di ritorno nel registro \texttt{x30} (LR) e trasferisce
+        il controllo.
+  \item Il prologo di \texttt{SecretFunction} costruisce il proprio frame:
+        decrementa SP e salva i registri callee-saved (tra cui \texttt{x29} e
+        \texttt{x30}) nello stack.
+  \item All'interno di \texttt{SecretFunction}, \texttt{CaptureStackBackTrace}
+        risale la catena \texttt{x29}/\texttt{x30} per produrre il backtrace
+        visibile in console.
+\end{enumerate}
+
+In questo scenario la catena \texttt{x29}/\texttt{x30} è integra, SP è
+all'interno dei limiti TEB, e ogni funzione possiede un record valido in
+\texttt{.pdata}: tutte le condizioni per uno stack walk corretto sono soddisfatte.
+
+\subsection{Codice Rilevante}
+
+\lstinputlisting[style=cstyle, language=C, caption={Chiamata diretta a \texttt{SecretFunction} da \texttt{TestNormalExecution} (inlinata in \texttt{main} da MSVC \texttt{/O2})}, label={lst:sc1-call}]{listings/sc1-call-site.c}
+
+\subsection{Output del Compilatore ARM64}
+
+Il breakpoint WinDbg è posizionato all'indirizzo \texttt{0x00007FF7\,1DFEB810}.
+La prima istruzione catturata è:
+
+\lstinputlisting[style=asmstyle, language=ARM64, caption={Prima istruzione del prologo di \texttt{SecretFunction} catturata da WinDbg}, label={lst:sc1-prologue}]{listings/sc1-prologue.asm}
+
+L'istruzione \texttt{stp x19, x20, [sp, \#-0x60]!} usa l'indirizzamento
+\emph{pre-index}: SP viene decrementato di \texttt{0x60} (96 byte, la dimensione
+del frame) e i registri \texttt{x19}/\texttt{x20} sono salvati al nuovo top dello
+stack. Le istruzioni successive del prologo (non catturate in questo dump, poiché
+il breakpoint è all'ingresso) salveranno \texttt{x29} (FP) e \texttt{x30} (LR) a
+un offset fisso, e imposteranno \texttt{x29 = SP} per ancorare la frame pointer
+chain.
+
+Il record \texttt{RUNTIME\_FUNCTION} associato a \texttt{SecretFunction} nel
+segmento \texttt{.pdata} descrive questi unwind codes, consentendo a
+\texttt{RtlVirtualUnwind} di ricostruire lo stato dei registri precedente senza
+eseguire il codice al contrario.
+
+\subsection{Stack in Memoria}
+
+Al momento del breakpoint, SP vale \texttt{0x00000007\,0D6FFCC0}. Il top
+dello stack contiene prevalentemente zeri: \texttt{SecretFunction} non ha
+ancora scritto il proprio frame.
+
+\begin{lstlisting}[style=outstyle, caption={Output di \texttt{dq sp L10} al breakpoint su \texttt{SecretFunction} (prologo non ancora eseguito)}, label={lst:sc1-spdump}]
+00000007`0d6ffcc0  00000000`00000000 00000000`00000000
+00000007`0d6ffcd0  00000006`40d891f6 00000000`016e3600
+00000007`0d6ffce0  00000000`00000000 00000000`00000000
+00000007`0d6ffcf0  00000000`00000000 00001000`0000000c
+00000007`0d6ffd00  00000000`00010000 00007fff`fffeffff
+00000007`0d6ffd10  00000000`00000003 00000000`00000002
+00000007`0d6ffd20  00000000`00010000 00007ff7`1e09b118
+00000007`0d6ffd30  00000176`d5106970 00000176`d511a170
+\end{lstlisting}
+
+I frame della catena, estratti dall'output di \texttt{k}, occupano le seguenti
+aree di stack (Tabella~\ref{tab:sc1-frames}):
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lll}
+\toprule
+Frame & Child-SP & Funzione \\
+\midrule
+0 & \texttt{0x00000007\,0D6FFCC0} & \texttt{SecretFunction} \\
+1 & (inline) & \texttt{TestNormalExecution+0x70} \\
+2 & \texttt{0x00000007\,0D6FFCC0} & \texttt{main+0x260} \\
+3 & (inline) & \texttt{invoke\_main} \\
+4 & \texttt{0x00000007\,0D6FFD70} & \texttt{\_\_scrt\_common\_main\_seh} \\
+5 & (inline) & \texttt{\_\_scrt\_common\_main} \\
+6 & \texttt{0x00000007\,0D6FFDB0} & \texttt{mainCRTStartup} \\
+7 & \texttt{0x00000007\,0D6FFDC0} & \texttt{BaseThreadInitThunk} \\
+8 & \texttt{0x00000007\,0D6FFDD0} & \texttt{RtlUserThreadStart} \\
+\bottomrule
+\end{tabular}
+\caption{Frame chain al breakpoint su \texttt{SecretFunction} (Scenario 1).
+         I frame con Child-SP identico a quello di \texttt{SecretFunction}
+         (\texttt{0x00000007\,0D6FFCC0}) sono funzioni inlinate in \texttt{main}
+         e non possiedono un proprio record di frame stack.}
+\label{tab:sc1-frames}
+\end{table}
+
+I limiti dello stack del thread principale, letti dal TEB tramite il registro
+\texttt{x18}, sono:
+
+\begin{itemize}
+  \item \textbf{StackBase} (\texttt{x18+0x08}): \texttt{0x00000007\,0D700000} —
+        indirizzo più alto, top iniziale dello stack.
+  \item \textbf{StackLimit} (\texttt{x18+0x10}): \texttt{0x00000007\,0D6FB000} —
+        limite inferiore della memoria committed (20~KB committed su 1~MB riservati).
+  \item \textbf{DeallocationStack} (TEB\texttt{+0x1478}):
+        \texttt{0x00000007\,0D600000} — base della riserva totale.
+\end{itemize}
+
+SP corrente (\texttt{0x00000007\,0D6FFCC0}) è ampiamente all'interno
+dell'intervallo \texttt{[StackLimit, StackBase]}, condizione necessaria perché
+\texttt{RtlCaptureStackBackTrace} consideri lo stack valido.
+
+\subsection{Evidenze Raccolte}
+
+Il ground truth: 9 frame totali, con le funzioni inlinate da MSVC
+(\texttt{TestNormalExecution}, \texttt{invoke\_main}, \texttt{\_\_scrt\_common\_main})
+prive di Child-SP proprio e visualizzate come \texttt{(Inline Function)}.
+La catena CRT è risolvibile senza interruzioni fino a \texttt{RtlUserThreadStart}.
+
+\begin{lstlisting}[style=outstyle, caption={Output di \texttt{k} in WinDbg al breakpoint su \texttt{SecretFunction} (Scenario 1 — Baseline)}, label={lst:sc1-k}]
+ # Child-SP          RetAddr           Call Site
+00 00000007`0d6ffcc0 00007ff7`1dfece00 stack_spoof!SecretFunction
+01 (Inline Function) -------- -------- stack_spoof!TestNormalExecution+0x70
+02 00000007`0d6ffcc0 00007ff7`1dfedc24 stack_spoof!main+0x260
+03 (Inline Function) -------- -------- stack_spoof!invoke_main+0x24
+04 00000007`0d6ffd70 00007ff7`1dfee124 stack_spoof!__scrt_common_main_seh+0x11c
+05 (Inline Function) -------- -------- stack_spoof!__scrt_common_main+0x8
+06 00000007`0d6ffdb0 00007fff`4a098740 stack_spoof!mainCRTStartup+0x14
+07 00000007`0d6ffdc0 00007fff`4ac843e4 KERNEL32!BaseThreadInitThunk+0x40
+08 00000007`0d6ffdd0 00000000`00000000 ntdll!RtlUserThreadStart+0x44
+\end{lstlisting}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario1/systeminformer-stack.png}
+  \caption{System Informer — stack del thread principale con WinDbg in pausa
+           su \texttt{SecretFunction} (Scenario 1). Le righe evidenziate in giallo
+           indicano funzioni inlinate prive di frame proprio.}
+  \label{fig:sc1-si}
+\end{figure}
+
+\paragraph{Confronto tra strumenti.}
+La Tabella~\ref{tab:sc1-tools} mostra come tre diversi stack walker producano
+risultati differenti sullo stesso stack legittimo.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lp{2.8cm}p{7cm}}
+\toprule
+Strumento & Frame visibili & Note \\
+\midrule
+\texttt{CaptureStackBackTrace} & 4 &
+  Salta \texttt{main}, \texttt{TestNormalExecution} e l'intera catena CRT
+  inline. Percorre solo la catena \texttt{x29}/LR; le funzioni inlinate non
+  hanno frame proprio e non compaiono. \\
+WinDbg \texttt{k} & 9 &
+  Vista completa: usa i record \texttt{.pdata} per unwind virtuale. Risolve
+  le funzioni inlinate come frame logici senza proprio Child-SP. Ground truth. \\
+System Informer & 8 &
+  Mostra le funzioni inlinate (evidenziate in giallo). \texttt{RtlUserThreadStart}
+  appare due volte (artefatto del walker ibrido che combina catena FP e
+  \texttt{.pdata}). \\
+\bottomrule
+\end{tabular}
+\caption{Confronto dei risultati di tre stack walker sul medesimo stack legittimo
+         (Scenario 1 — Baseline). La discrepanza è già presente prima di qualsiasi
+         spoofing, e sarà ampliata nei scenari successivi.}
+\label{tab:sc1-tools}
+\end{table}
+
+\subsection{Perché lo Stack Walker Vede Tutto}
+
+Nello scenario Baseline, le tre condizioni necessarie per uno stack walk corretto
+sono tutte soddisfatte:
+
+\begin{enumerate}
+  \item \textbf{Catena \texttt{x29}/\texttt{x30} integra.}
+        Ogni funzione non-leaf salva LR nello stack nel proprio prologo e
+        ripristina \texttt{x29} (FP) in modo che punti al frame precedente.
+        \texttt{RtlCaptureStackBackTrace} può risalire la catena senza
+        incontrare discontinuità.
+
+  \item \textbf{Record \texttt{.pdata} presente per ogni funzione.}
+        \texttt{SecretFunction} è dichiarata \texttt{\_\_declspec(noinline)},
+        quindi MSVC emette un record \texttt{RUNTIME\_FUNCTION} completo con
+        i propri unwind codes. WinDbg utilizza questo record per eseguire
+        l'unwind virtuale tramite \texttt{RtlVirtualUnwind}, indipendentemente
+        dallo stato del registro \texttt{x29}.
+
+  \item \textbf{SP all'interno dei limiti TEB.}
+        SP (\texttt{0x00000007\,0D6FFCC0}) appartiene all'intervallo
+        \texttt{[StackLimit, StackBase]} = \texttt{[0x00000007\,0D6FB000,}
+        \texttt{0x00000007\,0D700000]}. Windows considera lo stack pointer
+        valido: nessuna anomalia rilevabile a livello di memoria.
+\end{enumerate}
+
+Questo scenario sarà il termine di confronto per tutti quelli successivi: ogni
+tecnica di spoofing agisce su almeno una di queste tre condizioni, introducendo
+una discontinuità che inganna i tool di analisi user-mode pur restando
+(parzialmente) rilevabile a livello kernel.
+
+% ── 2.2 Single-Frame Spoofing ─────────────────────────────────────────────────
+
+\section{Single-Frame Spoofing}
+
+Questo scenario introduce la prima tecnica di evasione: un singolo indirizzo di
+ritorno falsificato, prelevato da \texttt{ntdll.dll}, viene inserito nella catena
+\texttt{x29}/\texttt{x30} in modo che \texttt{CaptureStackBackTrace} lo legga al
+posto del vero chiamante.
+
+\subsection{Meccanismo}
+
+Il meccanismo si articola in quattro fasi distinte:
+
+\begin{enumerate}
+  \item \textbf{Gadget discovery.} Il framework scansiona la sezione
+        \texttt{.text} di \texttt{ntdll.dll} alla ricerca di istruzioni
+        \texttt{BL} (Branch with Link, opcode \texttt{0x94000000} con maschera
+        \texttt{0xFC000000}). L'indirizzo immediatamente successivo a ciascun
+        \texttt{BL} è un \emph{call-site gadget}: un return address valido che
+        possiede un record \texttt{RUNTIME\_FUNCTION} in \texttt{.pdata} e
+        appartiene a una funzione legittima di sistema.
+        In questo run sono stati scoperti 512 gadget (ntdll base
+        \texttt{0x00007FFF4ABB0000}); il gadget selezionato casualmente è
+        \texttt{0x00007FFF4ABBA1D4} (\texttt{RtlDefaultNpAcl+0x54}).
+
+  \item \textbf{Frame falso.} \texttt{SpoofCallStack} costruisce sullo stack
+        una struttura \texttt{(FP\_falso, LR\_falso)}: il LR falso è il gadget
+        ntdll, il FP falso punta al frame reale di \texttt{SpoofCallStack}.
+        Il registro \texttt{x29} viene aggiornato per puntare a questa struttura.
+
+  \item \textbf{Chiamata via \texttt{BLR}.} \texttt{SecretFunction} è invocata
+        con \texttt{blr x19}: il prologo di \texttt{SecretFunction} salva nello
+        stack il \texttt{x29} corrente (che punta al frame falso) e il
+        \texttt{x30} corrente (che contiene il return address reale verso
+        \texttt{SpoofCallStack+0x50}, impostato dal \texttt{blr}).
+
+  \item \textbf{Doppio effetto sui walker.} I due stack walker producono risultati
+        divergenti: il walker per catena \texttt{x29} segue il FP e legge il LR
+        falso; il walker basato su \texttt{.pdata} legge il LR reale ma poi
+        fallisce sull'unwind di \texttt{SpoofCallStack} a causa di un'allocazione
+        secondaria non documentata.
+\end{enumerate}
+
+\subsection{Codice Rilevante}
+
+\lstinputlisting[style=cstyle, language=C, caption={Chiamata a \texttt{SpoofCallStack} con gadget ntdll (Scenario 2)}, label={lst:sc2-call}]{listings/sc2-spoof-call.c}
+
+\lstinputlisting[style=asmstyle, language=ARM64, caption={Implementazione ASM di \texttt{SpoofCallStack}: costruzione del frame falso e allocazione secondaria non documentata in \texttt{.pdata}}, label={lst:sc2-asm}]{listings/sc2-spoof-asm.asm}
+
+\subsection{Output del Compilatore ARM64 e \texttt{.pdata}}
+
+Il prologo di \texttt{SpoofCallStack} (righe 1--5 del Listato~\ref{lst:sc2-asm})
+è descritto nei record \texttt{.pdata}: l'allocazione principale di \texttt{0x40}
+byte e il salvataggio dei registri callee-saved \texttt{x19}--\texttt{x24}
+sono codificati negli unwind codes associati alla funzione.
+
+L'allocazione secondaria (\texttt{sub sp, sp, \#0x30}, riga 16) è invece
+deliberatamente assente dai record di unwind: si tratta di una modifica
+\emph{runtime} dello stack pointer che nessun walker basato su
+\texttt{.pdata} può conoscere. Questa asimmetria è il punto di forza della
+tecnica: \texttt{RtlVirtualUnwind} applica gli unwind codes partendo da un
+SP già errato di \texttt{0x30} byte, producendo un RetAddr nullo.
+
+Il gadget \texttt{RtlDefaultNpAcl+0x54} è un indirizzo valido in \texttt{.pdata}:
+cade all'interno della funzione \texttt{RtlDefaultNpAcl} di \texttt{ntdll.dll},
+ha un record \texttt{RUNTIME\_FUNCTION} ben formato e non è distinguibile da un
+legittimo sito di ritorno a livello di metadati statici.
+
+\subsection{Stack in Memoria}
+
+Al breakpoint (prima del prologo di \texttt{SecretFunction}),
+SP~=~\texttt{0x0000006A\,8ECFFA50}. La Tabella~\ref{tab:sc2-stack} annota le
+posizioni chiave nel dump.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lll}
+\toprule
+Offset da SP & Valore & Significato \\
+\midrule
+\texttt{+0x20} & \texttt{0x0000006A\,8ECFFA80} & FP del frame falso → frame reale di \texttt{SpoofCallStack} \\
+\texttt{+0x28} & \texttt{0x00007FFF\,2E555434} & LR del frame falso = \textbf{gadget ntdll} (spoofed) \\
+\texttt{+0x30} & \texttt{0x0000006A\,8ECFFB70} & FP reale → frame del chiamante (\texttt{main}) \\
+\texttt{+0x38} & \texttt{0x00007FF7\,AF05CF50} & LR reale → return a \texttt{main} \\
+\bottomrule
+\end{tabular}
+\caption{Annotazione del dump \texttt{dq sp L10} al breakpoint su
+         \texttt{SecretFunction} (Scenario 2). Il frame falso costruito da
+         \texttt{SpoofCallStack} è visibile agli offset \texttt{+0x20}/\texttt{+0x28}.}
+\label{tab:sc2-stack}
+\end{table}
+
+I limiti TEB del thread sono invariati rispetto allo scenario precedente
+(stessa esecuzione, stesso thread): StackBase \texttt{0x0000006A\,8ED00000},
+StackLimit \texttt{0x0000006A\,8ECFB000}. SP rimane all'interno
+dell'intervallo valido.
+
+\subsection{Evidenze Raccolte}
+
+La catena si tronca a 2 frame: il walker \texttt{.pdata} recupera il LR reale
+(\texttt{SpoofCallStack+0x50}), ma l'unwind di \texttt{SpoofCallStack} produce
+\texttt{RetAddr = 0x0} a causa del disallineamento \texttt{-0x30} non documentato
+in \texttt{.pdata}.
+
+\begin{lstlisting}[style=outstyle, caption={Output di \texttt{k} in WinDbg al breakpoint (Scenario 2 — Single-Frame Spoofing)}, label={lst:sc2-k}]
+ # Child-SP          RetAddr           Call Site
+00 0000006a`8ecffa50 00007ff7`af051430 stack_spoof!SecretFunction
+01 0000006a`8ecffa50 00000000`00000000 stack_spoof!SpoofCallStack+0x50
+\end{lstlisting}
+
+Al contrario di \texttt{k}, il walker per catena \texttt{x29} risale il frame
+falso e vede \texttt{RtlDefaultNpAcl} come chiamante diretto di
+\texttt{SecretFunction}: per \texttt{CaptureStackBackTrace} la chiamata appare
+legittima.
+
+\begin{lstlisting}[style=outstyle, caption={\texttt{CaptureStackBackTrace} dall'interno di \texttt{SecretFunction} (Scenario 2 — dati da console)}, label={lst:sc2-cbt}]
+[00] SecretFunction                   + 0x0078 <-- TARGET
+[01] RtlDefaultNpAcl                  + 0x0054 <-- SPOOFED
+[02] main                             + 0x03B0
+[03] mainCRTStartup                   + 0x0014
+[04] BaseThreadInitThunk              + 0x0040
+[05] RtlUserThreadStart               + 0x0044
+\end{lstlisting}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario2/systeminformer-stack.png}
+  \caption{System Informer — Scenario 2. Solo 2 frame visibili (entrambi
+           evidenziati in giallo): la catena è troncata dopo \texttt{SpoofCallStack}.
+           Confrontare con la Figura~\ref{fig:sc1-si} (Baseline, 8 frame).}
+  \label{fig:sc2-si}
+\end{figure}
+
+\subsection{Perché Funziona: Gadget Valido in \texttt{.pdata}}
+
+La tecnica sfrutta la divergenza strutturale tra i due meccanismi di stack
+walking presenti in Windows:
+
+\paragraph{Walker per catena \texttt{x29} (\texttt{CaptureStackBackTrace}).}
+Segue la catena dei frame pointer salvati nello stack. Il registro \texttt{x29}
+in \texttt{SecretFunction} punta al frame falso (offset \texttt{+0x20}).
+Leggendo la coppia \texttt{(FP, LR)} dal frame falso si ottiene il gadget
+ntdll come LR: il walker riporta \texttt{RtlDefaultNpAcl} come chiamante di
+\texttt{SecretFunction}.
+
+\paragraph{Walker per \texttt{.pdata} (WinDbg \texttt{k}).}
+Applica gli unwind codes di \texttt{SecretFunction} e recupera il LR reale
+(\texttt{SpoofCallStack+0x50}). Tenta poi di applicare gli unwind codes di
+\texttt{SpoofCallStack}, ma l'allocazione secondaria \texttt{-0x30} non
+documentata introduce un disallineamento di \texttt{0x30} byte nel calcolo
+dello SP virtuale. Il RetAddr recuperato è nullo: il walker non può risalire
+oltre \texttt{SpoofCallStack}.
+
+\paragraph{Il ruolo del gadget.}
+La scelta del gadget è critica: deve trovarsi in \texttt{.pdata} per non
+generare un'anomalia immediatamente rilevabile, e deve cadere subito dopo
+un'istruzione \texttt{BL} affinché appaia come un sito di ritorno autentico.
+Un indirizzo fuori da \texttt{.pdata} produrrebbe un frame marcato
+\texttt{UNKNOWN} da strumenti come Sysmon ETW-TI, rivelando lo spoofing.
+
+% ── 2.3 Multi-Frame Recursion ─────────────────────────────────────────────────
+
+\section{Multi-Frame Recursion}
+
+Questo scenario estende la tecnica del Single-Frame Spoofing costruendo una
+catena di tre frame \emph{genuini} (ciascuno con uno stack frame reale su
+\texttt{x29}) ma con indirizzi di ritorno falsificati. L'obiettivo è rendere
+la traccia visibile a \texttt{CaptureStackBackTrace} indistinguibile da una
+catena di chiamate legittime a funzioni di sistema.
+
+\subsection{Meccanismo}
+
+Il meccanismo si articola in tre componenti cooperanti:
+
+\begin{enumerate}
+  \item \textbf{Contesto di ricorsione.} La struttura \texttt{RECURSIVE\_SPOOF\_CONTEXT}
+        (Listato~\ref{lst:sc3-helper}) trasporta tra i livelli di ricorsione il
+        puntatore alla funzione target, l'array \texttt{spoofChain[3]} dei gadget
+        ntdll selezionati casualmente e i contatori \texttt{currentDepth}/\texttt{maxDepth}.
+
+  \item \textbf{Ricorsione con spoofing per livello.} \texttt{RecursiveSpoofHelper}
+        opera come segue ad ogni attivazione fino al raggiungimento della profondità
+        massima (\texttt{maxDepth = 3}):
+        \begin{enumerate}
+          \item Preleva \texttt{spoofChain[currentDepth]} come gadget per il livello
+                corrente.
+          \item Incrementa \texttt{currentDepth}.
+          \item Chiama \texttt{SpoofCallStack(RecursiveSpoofHelper, gadget[d], ctx, \&real)},
+                delegando al meccanismo identico a quello di Scenario~2 la creazione
+                di un frame reale con LR falsificato.
+          \item \texttt{SpoofCallStack} esegue \texttt{blr x19}, richiamando
+                \texttt{RecursiveSpoofHelper} al livello successivo.
+        \end{enumerate}
+
+  \item \textbf{Caso base.} Quando \texttt{currentDepth >= maxDepth}, \texttt{RecursiveSpoofHelper}
+        chiama \texttt{SecretFunction} direttamente (senza passare per
+        \texttt{SpoofCallStack}). A questo punto sullo stack sono presenti tre
+        frame reali di \texttt{RecursiveSpoofHelper}, ognuno con il proprio LR
+        sostituito da un gadget ntdll.
+\end{enumerate}
+
+In questo run sono stati selezionati i seguenti gadget (ntdll base
+\texttt{0x00007FFF4ABB0000}):
+
+\begin{itemize}
+  \item \texttt{Frame[0]}: \texttt{0x00007FFF4ABBA898} — \texttt{RtlDestroyQueryDebugBuffer+0x38}
+  \item \texttt{Frame[1]}: \texttt{0x00007FFF4ABB44E0} — \texttt{LdrControlFlowGuardEnforced+0x190}
+  \item \texttt{Frame[2]}: \texttt{0x00007FFF4ABBA7E4} — \texttt{RtlCreateQueryDebugBuffer+0x1D4}
+\end{itemize}
+
+\subsection{Codice Rilevante}
+
+\lstinputlisting[style=cstyle, language=C,
+  caption={\texttt{RECURSIVE\_SPOOF\_CONTEXT} e \texttt{RecursiveSpoofHelper}: il contesto
+           di ricorsione e la logica di spoofing per livello.},
+  label={lst:sc3-helper}]{listings/sc3-recursive-helper.c}
+
+Il primitivo \texttt{SpoofCallStack} impiegato ad ogni livello è identico a
+quello di Scenario~2 (Listato~\ref{lst:sc2-asm}): la struttura ASM, l'allocazione
+secondaria non documentata in \texttt{.pdata} e il gadget ntdll come LR falso
+sono invariati.
+
+\subsection{Output del Compilatore ARM64 e \texttt{.pdata}}
+
+\texttt{RecursiveSpoofHelper} è dichiarata \texttt{\_\_declspec(noinline)}: MSVC
+emette un record \texttt{RUNTIME\_FUNCTION} completo, rendendo ogni suo frame
+unwindable da \texttt{RtlVirtualUnwind}. Questa proprietà — che in Scenario~2
+era irrilevante perché \texttt{RecursiveSpoofHelper} non esisteva — diventa ora
+determinante per la divergenza tra walker.
+
+La catena \texttt{.pdata} dei tre livelli è: \texttt{RecursiveSpoofHelper} →
+\texttt{SpoofCallStack} → \textbf{punto cieco}. L'allocazione secondaria
+\texttt{sub sp, sp, \#0x30} in ogni invocazione di \texttt{SpoofCallStack}
+introduce lo stesso disallineamento di \texttt{0x30} byte già documentato in
+Scenario~2. Il walker \texttt{.pdata} si ferma alla prima istanza di
+\texttt{SpoofCallStack} che incontra, indipendentemente dalla profondità della
+catena ricorsiva.
+
+\subsection{Stack in Memoria}
+
+Al breakpoint su \texttt{SecretFunction} (entry, prologo non ancora eseguito),
+SP~=~\texttt{0x0000000b\,1599f620}. La Tabella~\ref{tab:sc3-stack} annota le
+posizioni chiave nel dump.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lll}
+\toprule
+Offset da SP & Valore & Significato \\
+\midrule
+\texttt{+0x10} & \texttt{0x00007ff7\,abf0b760} & LR reale → sito di \texttt{blr x19} in \texttt{SpoofCallStack} (livello 2) \\
+\texttt{+0x18} & \texttt{0x00007ff7\,abf01430} & LR → \texttt{RecursiveSpoofHelper} (frame 01 da \texttt{k}) \\
+\texttt{+0x20} & \texttt{0x00000000\,00000000} & Slot FP frame falso (livello corrente) \\
+\texttt{+0x28} & \texttt{0x00000000\,00000000} & Slot LR falso livello 2 (gadget a inizio frame) \\
+\texttt{+0x48} & \texttt{0x00007ffc\,fc53ac50} & \textbf{Gadget ntdll} livello 1 (ntdll\texttt{+0xAC50}) \\
+\texttt{+0x68} & \texttt{0x00007ffc\,fc536b98} & \textbf{Gadget ntdll} livello 0 (ntdll\texttt{+0x6B98}) \\
+\texttt{+0x78} & \texttt{0x0000000b\,1599f740} & Indirizzo stack (FP chain) \\
+\bottomrule
+\end{tabular}
+\caption{Annotazione del dump \texttt{dq sp L10} al breakpoint su
+         \texttt{SecretFunction} (Scenario 3). Due gadget ntdll sono visibili
+         agli offset \texttt{+0x48} e \texttt{+0x68}, corrispondenti ai livelli
+         0 e 1 della catena ricorsiva. Il terzo gadget (livello 2) occupa lo slot
+         \texttt{+0x28}, che in questo run di WinDbg risulta non inizializzato
+         al momento del breakpoint (ASLR diverso rispetto al run in console).}
+\label{tab:sc3-stack}
+\end{table}
+
+I limiti TEB del thread (StackBase \texttt{0x0000000b\,159a0000}, StackLimit
+\texttt{0x0000000b\,1599b000}) confermano che SP è interamente all'interno
+dell'intervallo valido, a differenza di quanto avverrà in Scenario~4.
+
+\subsection{Evidenze Raccolte}
+
+Nonostante la ricorsione a 3 livelli, il walker si ferma ai soliti 3 frame: la
+prima istanza di \texttt{SpoofCallStack} introduce lo stesso disallineamento
+\texttt{-0x30} di Scenario~2, bloccando l'unwind indipendentemente dalla
+profondità della catena.
+
+\begin{lstlisting}[style=outstyle, caption={Output di \texttt{k} in WinDbg al breakpoint
+  (Scenario 3 — Multi-Frame Recursion)}, label={lst:sc3-k}]
+ # Child-SP          RetAddr               Call Site
+00 0000000b`1599f620 00007ff7`abf0b784     stack_spoof!SecretFunction
+01 0000000b`1599f620 00007ff7`abf01430     stack_spoof!RecursiveSpoofHelper+0x24
+02 0000000b`1599f640 00000000`00000000     stack_spoof!SpoofCallStack+0x50
+\end{lstlisting}
+
+I 10 frame mostrano il pattern interleaved: gadget ntdll e frame reali di
+\texttt{RecursiveSpoofHelper} si alternano. I 3 gadget occupano posizioni
+plausibili (subito dopo una \texttt{BL} in ntdll, con record \texttt{.pdata}
+valido), rendendo questa catena strutturalmente indistinguibile da callback
+legittime.
+
+\begin{lstlisting}[style=outstyle, caption={\texttt{CaptureStackBackTrace} da dentro
+  \texttt{SecretFunction} (Scenario 3 — dati da console, ntdll base
+  \texttt{0x00007FFF4ABB0000})}, label={lst:sc3-cbt}]
+[00] SecretFunction                   + 0x0078 <-- TARGET
+[01] RtlCreateQueryDebugBuffer        + 0x01D4 <-- GADGET Frame[2]
+[02] RecursiveSpoofHelper             + 0x0064
+[03] LdrControlFlowGuardEnforced      + 0x0190 <-- GADGET Frame[1]
+[04] RecursiveSpoofHelper             + 0x0064
+[05] RtlDestroyQueryDebugBuffer       + 0x0038 <-- GADGET Frame[0]
+[06] RecursiveSpoofHelper             + 0x0064
+[07] mainCRTStartup                   + 0x0014
+[08] BaseThreadInitThunk              + 0x0040
+[09] RtlUserThreadStart               + 0x0044
+\end{lstlisting}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario3/systeminformer-stack.png}
+  \caption{System Informer — Scenario 3 (thread 5300). Solo 3 frame visibili,
+           tutti evidenziati in giallo. Il frame~2 mostra l'indirizzo grezzo
+           \texttt{0xb1599f740}, un puntatore interno allo stack letto come
+           return address per errore del walker ibrido FP-chain/\texttt{.pdata}.}
+  \label{fig:sc3-si}
+\end{figure}
+
+\paragraph{Confronto tra strumenti (Tabella~\ref{tab:sc3-tools}).}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lp{2.2cm}p{7.4cm}}
+\toprule
+Strumento & Frame visibili & Risultato \\
+\midrule
+\texttt{CaptureStackBackTrace} & 10 &
+  3 gadget ntdll interleaved con 3 frame reali di \texttt{RecursiveSpoofHelper}.
+  Catena CRT reale visibile dal frame 7. \\
+WinDbg \texttt{k} & 3 &
+  \texttt{SecretFunction} → \texttt{RecursiveSpoofHelper+0x24} →
+  \texttt{SpoofCallStack+0x50} → RetAddr nullo. Identico pattern di troncamento
+  dello Scenario~2; la profondità ricorsiva non modifica il comportamento. \\
+System Informer & 3 &
+  Tutti i frame in giallo. Frame~2 risolve un indirizzo interno allo stack
+  (\texttt{0xb1599f740}) come return address, rivelando il failure del walker. \\
+\bottomrule
+\end{tabular}
+\caption{Confronto dei risultati di tre stack walker (Scenario 3 — Multi-Frame
+         Recursion). \texttt{CaptureStackBackTrace} è l'unico a percorrere
+         l'intera catena ricorsiva, ma vede esclusivamente i LR falsificati.}
+\label{tab:sc3-tools}
+\end{table}
+
+\subsection{Perché i Frame del Helper Rimangono Visibili}
+
+La divergenza tra i tre walker dipende da quale struttura ciascuno percorre:
+
+\paragraph{Walker per catena \texttt{x29} (\texttt{CaptureStackBackTrace}).}
+Ogni attivazione di \texttt{SpoofCallStack} imposta \texttt{x29} in modo che
+punti al frame falso \texttt{(FP\_falso, LR\_gadget)} costruito nell'allocazione
+secondaria. Quando \texttt{RecursiveSpoofHelper} al caso base chiama direttamente
+\texttt{SecretFunction}, il registro \texttt{x29} corrente è quello stabilito
+dall'ultimo \texttt{SpoofCallStack}: punta al frame falso con gadget[2] come LR.
+\texttt{CaptureStackBackTrace} risale quindi la catena:
+\texttt{SecretFunction} → gadget[2] → \texttt{RecursiveSpoofHelper[2]} →
+gadget[1] → \texttt{RecursiveSpoofHelper[1]} → gadget[0] →
+\texttt{RecursiveSpoofHelper[0]} → catena CRT reale.
+I frame reali di \texttt{RecursiveSpoofHelper} rimangono visibili perché
+possiedono frame pointer validi: solo i loro LR sono sostituiti dai gadget.
+
+\paragraph{Walker per \texttt{.pdata} (WinDbg \texttt{k}).}
+L'unwind di \texttt{SecretFunction} è corretto e restituisce il LR reale, che
+punta al sito di chiamata diretta in \texttt{RecursiveSpoofHelper} (caso base).
+L'unwind di \texttt{RecursiveSpoofHelper} è anch'esso corretto e recupera il
+LR impostato da \texttt{SpoofCallStack} (\texttt{+0x50}). A questo punto il
+walker tenta di applicare gli unwind codes di \texttt{SpoofCallStack}, ma
+incontra lo stesso disallineamento \texttt{-0x30} non documentato in
+\texttt{.pdata}: il RetAddr calcolato è nullo. La catena si tronca dopo soli
+3 frame, indipendentemente dalla profondità della ricorsione.
+
+\paragraph{Implicazioni per il rilevamento.}
+Rispetto allo Scenario~2, la catena multi-frame aumenta il costo di rilevamento
+per un analista: tre nomi di funzione ntdll plausibili, con offset reali e
+record \texttt{.pdata} validi, alternati a frame genuini di una funzione interna.
+Un EDR che si basi esclusivamente su \texttt{CaptureStackBackTrace} non troverà
+anomalie strutturali (nessun gap nei frame pointer, nessun indirizzo fuori da
+\texttt{.pdata}), ma potrà rilevare l'assenza del chiamante reale di
+\texttt{SecretFunction} e la ricorrenza di \texttt{RecursiveSpoofHelper} nella
+catena.
+
+% ── 2.4 Stack Pivoting ────────────────────────────────────────────────────────
+
+\section{Stack Pivoting}
+
+Gli scenari precedenti manipolavano il contenuto dello stack del thread
+conservando SP all'interno dei limiti TEB. Questo scenario introduce una
+rottura qualitativa: SP viene spostato su una regione di memoria completamente
+separata, allocata con \texttt{VirtualAlloc}, invisibile al Thread Environment
+Block. Ogni stack walker che validi SP contro \texttt{[StackLimit, StackBase]}
+si ferma immediatamente.
+
+\subsection{Meccanismo}
+
+Il primitivo \texttt{ExecuteWithFakeFrame} (Listato~\ref{lst:sc4-asm})
+implementa il pivot in quattro fasi:
+
+\begin{enumerate}
+  \item \textbf{Salvataggio su stack reale.} Il prologo standard salva tutti i
+        registri callee-saved (inclusi \texttt{x29}/\texttt{x30}) sullo stack
+        del thread. L'SP reale viene conservato in \texttt{x19}, l'FP reale in
+        \texttt{x20}, il LR reale in \texttt{x24}.
+
+  \item \textbf{Caricamento del contesto falso.} I tre campi della struttura
+        \texttt{FAKE\_FRAME\_DATA} (Listato~\ref{lst:sc4-setup}) sono caricati
+        nei registri: \texttt{fakeFp}~→~\texttt{x25}, \texttt{fakeLr}~→~\texttt{x26}
+        (gadget ntdll), \texttt{fakeSp}~→~\texttt{x27} (top del fake stack da
+        64~KB allocato con \texttt{VirtualAlloc}).
+
+  \item \textbf{Pivot.} L'istruzione \texttt{mov sp, x27} sposta SP sul fake
+        stack. Da questo momento qualsiasi lettura di SP da parte di un walker
+        restituisce un indirizzo fuori dall'intervallo TEB. Viene costruito un
+        frame (\texttt{sub sp, sp, \#0x20}; \texttt{stp x25, x26, [sp]}) e
+        \texttt{x29} è aggiornato per puntarvi.
+
+  \item \textbf{Chiamata e ripristino.} La funzione target è invocata con
+        \texttt{blr x21}; al ritorno, \texttt{mov sp, x19} ripristina lo stack
+        reale prima del prologo inverso. L'intera operazione è atomica dal punto
+        di vista del chiamante.
+\end{enumerate}
+
+\subsection{Codice Rilevante}
+
+\lstinputlisting[style=cstyle, language=C,
+  caption={\texttt{FAKE\_FRAME\_DATA} e setup dello scenario 4:
+           allocazione del fake stack e configurazione del pivot.},
+  label={lst:sc4-setup}]{listings/sc4-fake-frame-setup.c}
+
+\lstinputlisting[style=asmstyle, language=ARM64,
+  caption={Implementazione ASM di \texttt{ExecuteWithFakeFrame}:
+           pivot SP → fake stack, costruzione frame falso, ripristino stack reale.},
+  label={lst:sc4-asm}]{listings/sc4-execute-fake-frame.asm}
+
+\subsection{Output del Compilatore ARM64 e \texttt{.pdata}}
+
+\texttt{ExecuteWithFakeFrame} possiede un record \texttt{RUNTIME\_FUNCTION}
+valido che descrive il prologo sul \emph{real} stack: l'allocazione
+\texttt{PROLOGUE\_SIZE\_EXEC}, il salvataggio di sei coppie di registri e la
+coppia \texttt{x29}/\texttt{x30}. Questo record è corretto per unwind
+sul real stack.
+
+Il problema sorge quando il walker \texttt{.pdata} tenta di applicare questi
+unwind codes partendo da un SP che si trova sul fake stack: la formula
+\texttt{SP\_virtuale = SP\_corrente + PROLOGUE\_SIZE\_EXEC} produce un indirizzo
+interno al fake stack (o oltre il suo top), dove i registri salvati non
+esistono. Il RetAddr recuperato è nullo o corrisponde a dati arbitrari.
+
+\subsection{Stack in Memoria}
+
+Al breakpoint su \texttt{SecretFunction} (entry, prologo non ancora eseguito),
+SP~=~\texttt{0x0000028d\,fa63ffe0}. La Tabella~\ref{tab:sc4-stack} documenta
+il layout del fake stack al momento del BP.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lll}
+\toprule
+Offset da SP & Valore & Significato \\
+\midrule
+\texttt{+0x00} & \texttt{0x0000028d\,fa63ff00} & FP falso → base del frame sul fake stack \\
+\texttt{+0x08} & \texttt{0x00007ffc\,fc539ec4} & LR falso = \textbf{gadget ntdll} (ntdll\texttt{+0x9EC4}) \\
+\texttt{+0x10} & \texttt{0x00000000\,00000000} & null \\
+\texttt{+0x18} & \texttt{0x00000000\,00000000} & null \\
+\texttt{+0x20+} & \texttt{????????\,????????} & \textbf{memoria non allocata} — top del fake stack \\
+\bottomrule
+\end{tabular}
+\caption{Dump \texttt{dq sp L10} al breakpoint su \texttt{SecretFunction}
+         (Scenario 4). A partire da \texttt{0x0000028d\,fa640000} la memoria
+         è inaccessibile: il fake stack di 64~KB termina esattamente lì.
+         Lo stesso indirizzo è il \texttt{fakeSp} impostato dalla struttura
+         \texttt{FAKE\_FRAME\_DATA}.}
+\label{tab:sc4-stack}
+\end{table}
+
+Il confronto con il TEB è determinante (Tabella~\ref{tab:sc4-teb}):
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lll}
+\toprule
+Campo TEB & Valore & Note \\
+\midrule
+StackBase    & \texttt{0x000000a3\,6d700000} & Top dello stack reale del thread \\
+StackLimit   & \texttt{0x000000a3\,6d6fb000} & Limite inferiore committed \\
+SP corrente  & \texttt{0x0000028d\,fa63ffe0} & \textbf{Fuori intervallo} — fake stack \\
+\bottomrule
+\end{tabular}
+\caption{SP al BP vs.\ limiti TEB (Scenario 4). SP si trova a circa
+         \texttt{0x1E5\,35C3FFE0} byte sopra \texttt{StackBase}: una distanza
+         impossibile per un normale stack overflow e immediatamente rilevabile
+         da qualsiasi validazione dell'intervallo.}
+\label{tab:sc4-teb}
+\end{table}
+
+\subsection{Evidenze Raccolte}
+
+Il \texttt{WARNING} è il segnale primario: WinDbg ha verificato che SP è fuori
+dall'intervallo \texttt{[StackLimit, StackBase]} del TEB. I 2 frame visibili
+condividono lo stesso Child-SP (\texttt{0x0000028d\,fa63ffe0}) perché entrambi
+si trovano sul fake stack; il RetAddr nullo del frame~01 blocca la catena.
+
+\begin{lstlisting}[style=outstyle, caption={Output di \texttt{k} in WinDbg al breakpoint
+  (Scenario 4 — Stack Pivoting)}, label={lst:sc4-k}]
+WARNING: Stack pointer is outside the normal stack bounds.
+         Stack unwinding can be inaccurate.
+ # Child-SP          RetAddr               Call Site
+00 0000028d`fa63ffe0 00007ff6`ea8b1594     stack_spoof!SecretFunction
+01 0000028d`fa63ffe0 00000000`00000000     stack_spoof!ExecuteWithFakeFrame+0x54
+\end{lstlisting}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario4/systeminformer-stack.png}
+  \caption{System Informer — Scenario 4 (thread 5544). 2 frame gialli;
+           nessun frame ntdll visibile. La catena si tronca su
+           \texttt{ExecuteWithFakeFrame}, identico comportamento al walker
+           \texttt{.pdata} di WinDbg.}
+  \label{fig:sc4-si}
+\end{figure}
+
+\paragraph{Confronto tra strumenti (Tabella~\ref{tab:sc4-tools}).}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lp{2.2cm}p{7.4cm}}
+\toprule
+Strumento & Frame visibili & Risultato \\
+\midrule
+\texttt{CaptureStackBackTrace} & 0 &
+  Disabilitato esplicitamente (\texttt{g\_captureStack = FALSE}) per non
+  inquinare l'output. In ogni caso, SP fuori da \texttt{[StackLimit, StackBase]}
+  causerebbe l'arresto immediato del walker. \\
+WinDbg \texttt{k} & 2 &
+  Warning esplicito ``outside normal stack bounds''. 2 frame prima del RetAddr
+  nullo. Stesso Child-SP per frame 00 e 01. \\
+System Informer & 2 &
+  Identico a WinDbg: 2 frame gialli, catena troncata su
+  \texttt{ExecuteWithFakeFrame+0x54}. \\
+\bottomrule
+\end{tabular}
+\caption{Confronto dei risultati di tre stack walker (Scenario 4 — Stack
+         Pivoting). La riduzione a 2 frame visibili, con avviso esplicito di
+         SP anomalo, rappresenta la firma più facilmente rilevabile tra i
+         cinque scenari.}
+\label{tab:sc4-tools}
+\end{table}
+
+\subsection{Perché \texttt{RtlCaptureStackBackTrace} si Ferma}
+
+Windows implementa una guardia esplicita prima di attraversare ogni frame
+durante lo stack walk: verifica che SP sia compreso in
+\texttt{[TEB.StackLimit, TEB.StackBase]}. Quando SP punta al fake stack
+(\texttt{0x0000028d\,fa63ffe0}), questa condizione è immediatamente falsa
+e il walker restituisce zero frame.
+
+\texttt{ExecuteWithFakeFrame} non può mascherare questa anomalia perché agisce
+a livello di registro SP — un registro privilegiato che il TEB non aggiorna
+automaticamente. Aggiornare manualmente \texttt{TEB.StackBase}/\texttt{StackLimit}
+richiederebbe scrittura nel TEB (scrivibile ma monitorabile), e in ogni caso
+produrrebbe un intervallo di stack corrispondente alla memoria \texttt{VirtualAlloc},
+che un EDR potrebbe marcare come sospetto per tipo di allocazione
+(\texttt{MEM\_PRIVATE} vs.\ stack di sistema).
+
+% ── 2.5 Spoofed Process Launch ────────────────────────────────────────────────
+
+\section{Spoofed Process Launch}
+
+Questo scenario applica il pivot di stack di Scenario~4 a una operazione
+ad alto impatto: il lancio di un processo tramite \texttt{CreateProcessW}.
+L'obiettivo è dimostrare che la catena di chiamate visibile a un EDR al
+momento della syscall \texttt{NtCreateUserProcess} può essere completamente
+separata dalla vera sequenza di esecuzione del thread.
+
+\subsection{Meccanismo}
+
+Il meccanismo è strutturalmente identico a Scenario~4, con due differenze:
+
+\begin{enumerate}
+  \item La funzione target passata a \texttt{ExecuteWithFakeFrame} è
+        \texttt{LaunchNotepad} (Listato~\ref{lst:sc5-code}) invece di
+        \texttt{SecretFunction}.
+
+  \item \texttt{LaunchNotepad} invoca \texttt{CreateProcessW} per avviare
+        \texttt{notepad.exe}. Al momento della syscall, SP si trova sul
+        fake stack fuori dai limiti TEB: la call chain visibile a qualsiasi
+        stack walker user-mode è troncata a 2 frame, indipendentemente dalla
+        profondità reale della catena di chiamate.
+\end{enumerate}
+
+\subsection{Codice Rilevante}
+
+\lstinputlisting[style=cstyle, language=C,
+  caption={\texttt{LaunchNotepad} e setup dello Scenario 5.
+           Il primitivo \texttt{ExecuteWithFakeFrame} è invariato rispetto
+           allo Scenario~4 (Listato~\ref{lst:sc4-asm}).},
+  label={lst:sc5-code}]{listings/sc5-launch-notepad.c}
+
+\subsection{Output del Compilatore ARM64 e \texttt{.pdata}}
+
+\texttt{LaunchNotepad} è dichiarata \texttt{\_\_declspec(noinline)}: possiede
+un record \texttt{RUNTIME\_FUNCTION} proprio, correttamente descritto in
+\texttt{.pdata}. L'unwind di \texttt{LaunchNotepad} è quindi teoricamente
+corretto, ma il walker non riesce ad andare oltre \texttt{ExecuteWithFakeFrame}
+per le stesse ragioni documentate in Scenario~4.
+
+\subsection{Stack in Memoria}
+
+Al breakpoint su \texttt{LaunchNotepad} (entry, prologo non ancora eseguito),
+SP~=~\texttt{0x00000242\,f344ffe0}. Il layout è identico a Scenario~4
+(Tabella~\ref{tab:sc5-stack}).
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lll}
+\toprule
+Offset da SP & Valore & Significato \\
+\midrule
+\texttt{+0x00} & \texttt{0x00000242\,f344ff00} & FP falso → frame sul fake stack \\
+\texttt{+0x08} & \texttt{0x00007ffc\,fc53501c} & LR falso = \textbf{gadget ntdll} (ntdll\texttt{+0x501C}) \\
+\texttt{+0x10} & \texttt{0x00000000\,00000000} & null \\
+\texttt{+0x20+} & \texttt{????????\,????????} & memoria non allocata — top fake stack a \texttt{f3450000} \\
+\bottomrule
+\end{tabular}
+\caption{Dump \texttt{dq sp L10} al breakpoint su \texttt{LaunchNotepad}
+         (Scenario 5). TEB StackBase \texttt{0x9ed6b00000}, StackLimit
+         \texttt{0x9ed6afa000}: SP è fuori intervallo esattamente come in
+         Scenario~4.}
+\label{tab:sc5-stack}
+\end{table}
+
+\subsection{Evidenze Raccolte}
+
+Strutturalmente identico allo Scenario~4: stesso \texttt{WARNING}, stessa firma
+a 2 frame con RetAddr nullo. Il cambio di target da \texttt{SecretFunction} a
+\texttt{LaunchNotepad} non altera il comportamento del walker --- la firma SP
+fuori TEB è invariante rispetto alla funzione bersaglio.
+
+\begin{lstlisting}[style=outstyle, caption={Output di \texttt{k} in WinDbg al breakpoint
+  (Scenario 5 — Spoofed Process Launch)}, label={lst:sc5-k}]
+WARNING: Stack pointer is outside the normal stack bounds.
+         Stack unwinding can be inaccurate.
+ # Child-SP          RetAddr               Call Site
+00 00000242`f344ffe0 00007ff6`ea8b1594     stack_spoof!LaunchNotepad
+01 00000242`f344ffe0 00000000`00000000     stack_spoof!ExecuteWithFakeFrame+0x54
+\end{lstlisting}
+
+\begin{lstlisting}[style=outstyle, caption={Sysmon EID~1 — Process Create per \texttt{notepad.exe}
+  lanciato da \texttt{stack\_spoof.exe} con stack pivotato (Scenario 5).},
+  label={lst:sc5-sysmon}]
+UtcTime:         2026-05-24 09:09:33.909
+ProcessId:       5912
+Image:           ...\Notepad\Notepad.exe
+CommandLine:     C:\Windows\System32\notepad.exe
+ParentProcessId: 7808
+ParentImage:     ...\stack_spoof.exe
+ParentCommandLine: stack_spoof.exe
+\end{lstlisting}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario5/systeminformer-stack.png}
+  \caption{System Informer — Scenario 5 (thread 5508). 2 frame gialli:
+           \texttt{LaunchNotepad+0x4} e \texttt{ExecuteWithFakeFrame+0x54}.
+           Struttura identica a Scenario~4; il cambio di target function non
+           altera il comportamento dei walker.}
+  \label{fig:sc5-si}
+\end{figure}
+
+\subsection{Significato per un EDR}
+
+L'evento Sysmon EID~1 (Listato~\ref{lst:sc5-sysmon}) rivela la \emph{process
+lineage}: \texttt{ParentImage = stack\_spoof.exe} è un'anomalia rilevabile se
+il processo padre è già marcato come sospetto. Tuttavia questo campo non
+contiene informazioni sulla call stack al momento di \texttt{CreateProcessW}:
+Sysmon EID~1 non include un campo \texttt{CallTrace}.
+
+Questa assenza è strutturalmente significativa. Un EDR user-mode che agganciasse
+\texttt{NtCreateUserProcess} tramite hook in-process vedrebbe lo stack pivotato:
+SP fuori dai limiti TEB, soli 2 frame risolvibili, gadget ntdll come LR. Un EDR
+kernel-mode con stack capture su \texttt{NtCreateUserProcess} potrebbe catturare
+la call stack dal kernel, indipendentemente dalla posizione di SP user-mode, e
+rilevare l'anomalia \texttt{[StackLimit, StackBase]}.
+
+La distinzione tra rilevamento user-mode (cieco allo stack pivot) e kernel-mode
+(potenzialmente visibile) costituisce il punto di partenza per l'analisi
+difensiva del Capitolo~\ref{ch:difensiva}.

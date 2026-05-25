@@ -1,0 +1,51 @@
+dt _NT_TIB @$teb
+stack_spoof!_NT_TIB
+   +0x000 ExceptionList    : (null)
+   +0x008 StackBase        : 0x00000007`0d700000 Void
+   +0x010 StackLimit       : 0x00000007`0d6fb000 Void
+   +0x018 SubSystemTib     : (null)
+   +0x020 FiberData        : 0x00000000`00001e00 Void
+   +0x020 Version          : 0x1e00
+   +0x028 ArbitraryUserPointer : (null)
+   +0x030 Self             : 0x00000007`0d4b1000 _NT_TIB
+
+dt _TEB @$teb
+stack_spoof!_TEB
+   +0x000 NtTib            : _NT_TIB
+   +0x038 EnvironmentPointer : (null)
+   +0x040 ClientId         : _CLIENT_ID
+   +0x050 ActiveRpcHandle  : (null)
+   +0x058 ThreadLocalStoragePointer : 0x00000176`d5106e90 Void
+   +0x060 ProcessEnvironmentBlock : 0x00000007`0d4b0000 _PEB
+   +0x068 LastErrorValue   : 0
+   +0x06c CountOfOwnedCriticalSections : 0
+   +0x070 CsrClientThread  : (null)
+   +0x078 Win32ThreadInfo  : (null)
+   +0x080 User32Reserved   : [26] 0
+   +0x0e8 UserReserved     : [5] 0
+   +0x100 WOW32Reserved    : (null)
+   +0x108 CurrentLocale    : 0x409
+   +0x10c FpSoftwareStatusRegister : 0
+   +0x110 ReservedForDebuggerInstrumentation : [16] (null)
+   +0x190 SystemReserved1  : [25] (null)
+   +0x258 HeapFlsData      : 0x00000176`d53021e0 Void
+   +0x260 RngState         : [4] 0xda48fcc6`3d9e504e
+   +0x280 PlaceholderCompatibilityMode : 0 ''
+   +0x281 PlaceholderHydrationAlwaysExplicit : 0 ''
+   +0x282 PlaceholderReserved : [10]  ""
+   +0x28c ProxiedProcessId : 0
+   +0x290 _ActivationStack : _ACTIVATION_CONTEXT_STACK
+   +0x2b8 WorkingOnBehalfTicket : [8]  ""
+   +0x2c0 ExceptionCode    : 0n0
+   +0x2c4 Padding0         : [4]  ""
+   +0x2c8 ActivationContextStackPointer : 0x00000007`0d4b1290 _ACTIVATION_CONTEXT_STACK
+   +0x2d0 InstrumentationCallbackSp : 0
+   +0x2d8 InstrumentationCallbackPreviousPc : 0
+   +0x2e0 InstrumentationCallbackPreviousSp : 0
+   +0x2e8 TxFsContext      : 0xfffe
+   +0x2ec InstrumentationCallbackDisabled : 0 ''
+   +0x2ed UnalignedLoadStoreExceptions : 0 ''
+   +0x1478 DeallocationStack : 0x00000007`0d600000 Void
+   +0x1680 TlsLinks         : _LIST_ENTRY [ 0x00000000`00000000 - 0x00000000`00000000 ]
+   +0x17ee SameTebFlags     : 0x420
+   +0x17ee InitialThread    : 0y1
