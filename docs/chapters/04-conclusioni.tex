@@ -1,21 +1,17 @@
 \chapter{Conclusioni: Tradeoff Attaccante / Difensore}
 \label{ch:conclusioni}
 
-I cinque scenari documentati nei capitoli precedenti non sono cinque soluzioni
-alternative allo stesso problema: sono cinque punti distinti su due assi
-ortogonali — complessità di implementazione e superficie di rilevamento lasciata
-esposta. Questo capitolo analizza il problema simmetricamente: prima dal punto
-di vista dell'attaccante che deve scegliere la tecnica, poi dal punto di vista
-del difensore che deve scegliere dove investire.
+I capitoli precedenti hanno documentato le tecniche e misurato i loro effetti
+sugli strumenti di analisi. Questo capitolo sintetizza: dal punto di vista
+dell'attaccante, quale scenario è ottimale e perché; dal punto di vista del
+difensore, quale strategia è ottimale e perché.
 
-% ── 4.1 Tradeoff dell'Attaccante ─────────────────────────────────────────────
+% ── 5.1 Tradeoff dell'Attaccante ─────────────────────────────────────────────
 
 \section{Tradeoff dell'Attaccante: Complessità vs Invisibilità}
 
 La Tabella~\ref{tab:attacker-tradeoff} sintetizza il rapporto costo/beneficio
-di ogni scenario dal punto di vista offensivo. I criteri di valutazione sono:
-complessità di implementazione (selezione gadget, allocazione memoria, gestione
-dello stato), e la firma residua lasciata a ciascun livello di rilevamento.
+di ogni scenario dal punto di vista offensivo.
 
 \begin{table}[htbp]
 \centering
@@ -47,156 +43,112 @@ SP anomalia
 \bottomrule
 \end{tabular}
 \caption{Tradeoff attaccante: complessità vs firma residua per scenario.
-         Le righe corrispondono ai criteri di valutazione; le colonne agli scenari.
          ``N/A'' = Sysmon non registra EID~1 per scenari senza creazione di processo.}
 \label{tab:attacker-tradeoff}
 \end{table}
 
-\subsection{Il Punto di Massimo Rapporto Qualità/Costo}
+\paragraph{Punto ottimale: Scenario~3.}
+Scenario~3 offre il miglior compromesso per chi operi contro un difensore con
+soli strumenti user-mode: nessuna firma strutturale rilevabile, SP in bounds,
+gadget con \texttt{.pdata} valida. Il costo aggiuntivo rispetto a Scenario~2
+è la gestione della ricorsione e la selezione di tre gadget compatibili —
+complessità gestibile.
 
-Scenario~3 (Multi-Frame Recursion) offre il miglior compromesso per un
-attaccante che operi esclusivamente in user-mode contro un difensore dotato
-solo di strumenti user-mode. La catena prodotta da
-\texttt{CaptureStackBackTrace} — 10 frame con gadget ntdll interleaved tra
-frame reali di \texttt{RecursiveSpoofHelper} — è \emph{strutturalmente
-identica} a una legittima sequenza di callback ntdll. SP rimane all'interno
-dei limiti TEB, non esistono RetAddr nulli in posizione anomala, e i gadget
-hanno record \texttt{.pdata} validi. Nessun walker user-mode, da solo, può
-distinguere questa catena da una chiamata legittima senza conoscere la
-ground truth.
+\paragraph{Massima evasione (con costo): Scenari~4 e~5.}
+Questi scenari eliminano completamente il backtrace visibile a
+\texttt{CaptureStackBackTrace}, ma introducono la firma SP fuori TEB —
+ineliminabile in user-mode. Sono preferibili solo quando la firma SP è
+accettabile nel contesto operativo; per l'invisibilità totale, Scenario~3
+rimane superiore.
 
-Il costo aggiuntivo rispetto a Scenario~2 è la selezione di tre gadget
-compatibili (LR dei tre livelli ricorsivi) e la gestione del contesto
-\texttt{RECURSIVE\_SPOOF\_CONTEXT}. La complessità rimane gestibile.
-
-\subsection{Il Punto di Massima Evasione (con Costo)}
-
-Scenari~4 e~5 eliminano completamente il backtrace visibile a
-\texttt{CaptureStackBackTrace}, riducendo la call chain a 2 frame. Questa
-è la firma più difficile da correlare a una specifica funzione target. Il
-costo è la firma SP fuori TEB — irreducibile in user-mode — che rende la
-tecnica rilevabile da qualsiasi strumento che verifichi
-\texttt{[StackLimit, StackBase]} prima di ogni frame.
-
-Per un attaccante che controlli la narrativa del processo (ad esempio, un
-impianto la cui presenza sia già nota al difensore e classificata come
-autorizzata), la firma SP può essere accettabile. Per un attaccante che
-punta all'invisibilità totale, Scenario~3 è preferibile.
-
-% ── 4.2 Segnali Residui Ineliminabili ────────────────────────────────────────
+% ── 5.2 Segnali Residui Ineliminabili ────────────────────────────────────────
 
 \section{Segnali Residui Ineliminabili in User-Mode}
 
-Ogni tecnica di call stack spoofing analizzata lascia almeno un segnale che
-non può essere eliminato senza uscire dallo spazio user-mode o senza
-introdurre una firma alternativa di pari visibilità.
+Ogni tecnica analizzata lascia almeno un segnale che non può essere eliminato
+senza introdurre una firma alternativa di pari o maggiore visibilità.
 
 \paragraph{SP fuori \texttt{[TEB.StackLimit, TEB.StackBase]} (Scenari~4 e~5).}
-L'istruzione \texttt{mov sp, x27} in \texttt{ExecuteWithFakeFrame} trasferisce
-il controllo dello stack a memoria \texttt{VirtualAlloc}. L'unico modo per
-nascondere questa anomalia è aggiornare manualmente \texttt{TEB.StackBase} e
-\texttt{TEB.StackLimit} per coprire il fake stack. Questa scrittura nel TEB
-è legale in user-mode, ma trasforma il problema: la regione puntata da
-\texttt{TEB.StackBase} diventerebbe di tipo \texttt{MEM\_PRIVATE} invece di
-\texttt{MEM\_STACK}, sostituendo la firma SP con la firma del tipo di
-allocazione. Un attaccante non può eliminare entrambe le firme contemporaneamente
-senza privilegi kernel per modificare i descrittori di memoria.
+L'unico modo per mascherare questa anomalia è sovrascrivere manualmente
+\texttt{TEB.StackBase} e \texttt{TEB.StackLimit} — operazione legale in
+user-mode, ma che trasforma il tipo di regione da \texttt{MEM\_STACK} a
+\texttt{MEM\_PRIVATE}, sostituendo una firma con un'altra. Entrambe le firme
+non sono eliminabili contemporaneamente senza privilegi kernel.
 
-\paragraph{RetAddr nullo in posizione non terminale (Scenari~2 e~3).}
-La troncatura della catena \texttt{.pdata} produce un RetAddr
-\texttt{00000000\,00000000} prima dei frame CRT canonici
-(\texttt{BaseThreadInitThunk}, \texttt{RtlUserThreadStart}). Questo segnale
-è più sottile della firma SP: non è rilevabile da un singolo walker, ma è
-identificabile da una regola che controlli se la profondità della catena
-corrisponde alla struttura attesa per il tipo di thread. Un thread CRT legittimo
-termina sempre con i due frame CRT; una catena che termini prima con null è
-strutturalmente anomala.
+\paragraph{RetAddr nullo in posizione non terminale (Scenario~2).}
+La troncatura della catena \texttt{.pdata} produce un RetAddr nullo prima dei
+frame CRT canonici (\texttt{BaseThreadInitThunk}, \texttt{RtlUserThreadStart}).
+Il segnale è sottile — non rilevabile da un singolo walker — ma identificabile
+da una regola sulla profondità minima attesa della catena.
 
 \paragraph{ParentImage anomalo (Scenario~5).}
-Sysmon EID~1 registra \texttt{ParentImage = stack\_spoof.exe}: la relazione
-di parentela è visibile indipendentemente dal meccanismo di invocazione.
-Questo segnale è contestuale (richiede una lista di processi autorizzati a
-creare processi di sistema), ma non è eliminabile: \texttt{NtCreateUserProcess}
-registra sempre il processo padre, e Sysmon EID~1 lo espone senza dipendere
-dallo stack del thread chiamante.
+Sysmon EID~1 registra sempre il processo padre indipendentemente dal meccanismo
+di invocazione. Il segnale è contestuale (richiede una allowlist dei processi
+autorizzati), ma non è eliminabile dall'attaccante.
 
-% ── 4.3 Tradeoff del Difensore ────────────────────────────────────────────────
+% ── 5.3 Tradeoff del Difensore ────────────────────────────────────────────────
 
 \section{Tradeoff del Difensore: Copertura vs Costo}
-
-Il difensore dispone di un insieme di strumenti con coperture complementari e
-costi operativi diversi. La Tabella~\ref{tab:defender-tradeoff} valuta ogni
-strumento su due assi: scenari coperti e costo di deployment/false positive rate.
 
 \begin{table}[htbp]
 \centering
 \small
-\begin{tabular}{lp{3.5cm}p{2cm}p{3cm}}
+\begin{tabular}{lp{3cm}p{2cm}p{4cm}}
 \toprule
-Strumento & Scenari rilevati & Costo & Limite principale \\
+Strumento & Copertura & Costo & Limite principale \\
 \midrule
 Sysmon EID~1
   & Sc5 (\texttt{ParentImage})
-  & Basso (driver esistente)
+  & Basso
   & Contestuale: richiede allowlist \\
 Walker user-mode (SP check)
-  & Sc4, Sc5 (SP anomalia)
-  & Basso (hook in-process)
-  & Cieco a pivot se non eseguito al momento corretto \\
+  & Sc4, Sc5 (rilevazione)
+  & Basso
+  & Rilevazione post-hoc; nessun blocco affidabile (polling asincrono) \\
 Walker user-mode (depth check)
-  & Sc2, Sc3 (null RetAddr)
+  & Sc2 (null RetAddr)
   & Medio
   & FPR elevato senza baseline per processo \\
-Kernel-mode stack capture
+Kernel-mode (MDE/EDR)
   & Sc1--5 (tutti)
-  & Alto (kernel driver)
-  & Overhead syscall; richiede firma Microsoft \\
-PAC (\texttt{/guard:signret})
-  & Sc2, Sc3 (LR falso)
-  & Nessuno a runtime (hardware); opt-in toolchain
-  & Solo binari compilati con \texttt{/guard:signret}; legacy non protetti \\
+  & Alto
+  & Richiede licenza enterprise; overhead syscall \\
 \bottomrule
 \end{tabular}
-\caption{Tradeoff difensore: copertura degli scenari vs costo operativo.
-         FPR = false positive rate.}
+\caption{Tradeoff difensore: copertura degli scenari vs costo operativo.}
 \label{tab:defender-tradeoff}
 \end{table}
 
-\subsection{La Combinazione Minima Efficace}
+\subsection{Soluzione: EDR o Accettare i Gap}
 
-Nessuno strumento singolo copre tutti e cinque gli scenari a costo accettabile.
-La combinazione con il miglior rapporto copertura/costo per un difensore in
-contesto enterprise è:
+Nessuna combinazione di strumenti user-mode copre tutti e cinque gli scenari.
+Sysmon EID~1, SP bounds check e profondità minima del backtrace coprono
+Scenari~2, 4 e~5, ma lasciano Scenario~3 irrisolto: catena strutturalmente
+valida, SP in bounds, nessuna firma deterministica rilevabile dall'esterno.
 
-\begin{enumerate}
-  \item \textbf{Sysmon EID~1 con allowlist} — copre Scenario~5 a costo zero
-        aggiuntivo se Sysmon è già deployato. Richiede manutenzione della lista
-        dei processi autorizzati a creare processi di sistema.
+Il gap non è colmabile in user-mode. La detection affidabile di Scenario~3
+richiede analisi comportamentale in kernel-mode — disponibile in soluzioni EDR
+come Microsoft Defender for Endpoint.
 
-  \item \textbf{SP bounds check al momento della syscall} — intercettare
-        \texttt{NtCreateUserProcess} e \texttt{NtAllocateVirtualMemory} con un
-        minifilter o callback kernel verifica la condizione~(\ref{eq:spcheck2})
-        nel contesto del thread chiamante, coprendo Scenari~4 e~5 in modo
-        deterministico.
+Il tradeoff per il difensore è quindi binario:
 
-  \item \textbf{Profondità minima del backtrace} — una regola che imponga
-        almeno $N$ frame validi prima dei frame CRT rileva la troncatura di
-        Scenari~2 e~3. Il valore di $N$ deve essere calibrato per processo per
-        evitare falsi positivi su thread con catene di chiamata corte per design.
-\end{enumerate}
+\begin{itemize}
+  \item \textbf{Adottare un EDR (es.\ MDE)} — copertura completa su tutti e
+        cinque gli scenari, incluso Scenario~3; costo in licenze e overhead
+        syscall.
+  \item \textbf{Non adottare un EDR} — copertura parziale con strumenti
+        user-mode; Scenario~3 rimane un gap strutturale da accettare
+        consapevolmente come rischio residuo.
+\end{itemize}
 
-Scenario~3 rimane il caso più difficile: la sua catena è strutturalmente valida,
-SP è in bounds, e i gadget hanno \texttt{.pdata} legittima. L'unica detection
-affidabile senza ground truth è la correlazione comportamentale: un thread che
-esegua sistematicamente chiamate a funzioni ntdll specifiche in un pattern
-interleaved è anomalo rispetto alla baseline del processo.
+Il patchwork user-mode (Sysmon + SP check + depth check) non è una
+alternativa strategica all'EDR: è la soluzione per contesti in cui l'EDR non
+è deployabile, con la consapevolezza esplicita del gap che introduce.
 
 \bigskip
 \noindent
-Il risultato fondamentale di questa analisi è asimmetrico: l'attaccante può
-scegliere il punto ottimale sulla curva complessità/invisibilità in funzione
-del livello di detection del difensore; il difensore deve coprire l'intera
-curva per garantire la rilevazione di tutte le tecniche. Questa asimmetria
-si riduce solo con strumenti che operino a un livello di privilegio che il
-codice offensivo non può raggiungere: kernel-mode callback e PAC hardware
-già attivo per i binari che adottano \texttt{/guard:signret}.
+Il risultato fondamentale è un'asimmetria strutturale: l'attaccante sceglie
+il punto ottimale su una curva complessità/invisibilità; il difensore deve
+coprire l'intera curva. Questa asimmetria si riduce solo con strumenti a
+privilegio irraggiungibile dal codice offensivo: kernel-mode callback disponibili
+esclusivamente in soluzioni EDR.

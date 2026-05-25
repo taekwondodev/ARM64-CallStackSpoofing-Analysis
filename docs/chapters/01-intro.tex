@@ -283,10 +283,6 @@ difensive sono analizzate nella Sezione~3.4.
 \section{Ambiente di Laboratorio}
 \label{sec:ambiente}
 
-Tutti gli scenari sono stati eseguiti su una macchina virtuale VMware Fusion
-con sistema operativo Windows 11 ARM64 (versione 25H2v2, build 26200.8037),
-2 vCPU Apple Silicon e 4~GB di RAM.
-
 Il laboratorio simula le operazioni di evasione di un worm già in esecuzione
 sul sistema target: \texttt{stack\_spoof.exe} esegue allocazioni di memoria
 eseguibile e creazione di processi --- le stesse operazioni che un worm reale
@@ -295,25 +291,21 @@ cinque scenari. Il meccanismo di auto-replicazione non è oggetto di questo
 laboratorio: l'analisi è concentrata esclusivamente sulle tecniche di evasione
 dal rilevamento degli stack walker user-mode.
 
-Il binario \texttt{stack\_spoof.exe} è stato compilato nell'ambiente
-\emph{ARM64 Native Tools Command Prompt} di Visual Studio con i seguenti flag:
+\paragraph{Macchina virtuale.}
+\begin{itemize}
+  \item \textbf{Hypervisor} — VMware Fusion su macOS Apple Silicon.
+  \item \textbf{Sistema operativo} — Windows 11 ARM64, versione 25H2v2,
+        build 26200.8037.
+  \item \textbf{Risorse} — 2 vCPU Apple Silicon, 4~GB di RAM.
+\end{itemize}
 
-\begin{lstlisting}[style=outstyle, caption={Flag di compilazione e linking di \texttt{stack\_spoof.exe}},
-label={lst:build-flags}]
-cl.exe  /O2 /MT /Zi /EHsc /std:c++17 /W3
-armasm64  stack_spoof_arm64.asm
-link.exe  /MACHINE:ARM64 /DEBUG
-\end{lstlisting}
-
-L'assenza del flag \texttt{/guard:signret} è deliberata: il compilatore non
-emette le istruzioni \texttt{pacibsp}/\texttt{autibsp} per la firma del link
-register, lasciando \texttt{x30} non protetto da PAC. Questa condizione è
-necessaria per la riuscita delle tecniche di spoofing analizzate e riflette il caso reale di
-software compilato senza hardening PAC attivo.
-
-Gli strumenti di analisi impiegati sono WinDbg (walker \texttt{.pdata} e
-breakpoint), System Informer (stack view in-process), Sysmon (event logging)
-e l'API \texttt{CaptureStackBackTrace} richiamata direttamente dal binario.
+\paragraph{Software installato.}
+\begin{itemize}
+  \item \textbf{Git for Windows} — per clonare la repository dalla VM.
+  \item \textbf{Visual Studio} con i componenti \emph{Sviluppo di applicazioni
+        desktop con C++} e \emph{ARM64 Native Tools} — per il toolchain di
+        compilazione e linking ARM64.
+\end{itemize}
 
 \paragraph{Configurazione di Windows Defender.}
 Windows Defender (Microsoft Defender Antivirus) è il tool di sicurezza
@@ -332,3 +324,25 @@ modifiche tramite l'interfaccia \emph{Windows Security}:
         clonata è stata aggiunta alle esclusioni di Defender per impedire la
         quarantena automatica del binario durante compilazione ed esecuzione.
 \end{itemize}
+
+\paragraph{Strumenti di analisi.}
+\begin{itemize}
+  \item \textbf{WinDbg} — walker \texttt{.pdata} e breakpoint per ispezione
+        dello stack a basso livello.
+  \item \textbf{System Informer} — stack view in-process per visualizzazione
+        del backtrace dal punto di vista del processo.
+  \item \textbf{Sysmon} — event logging di sistema per il tracciamento di
+        creazione di processi e allocazioni di memoria.
+  \item \textbf{CaptureStackBackTrace} — API Windows richiamata direttamente
+        dal binario per misurare i frame visibili a runtime.
+\end{itemize}
+
+\paragraph{Ottenere il worm simulato.}
+Nella directory esclusa da Defender:
+\begin{enumerate}
+  \item \texttt{git clone} della repository.
+  \item \texttt{cd} nella cartella clonata.
+  \item Dall'ambiente \emph{ARM64 Native Tools Command Prompt} di Visual
+        Studio, eseguire \texttt{build.bat} per produrre
+        \texttt{stack\_spoof.exe}.
+\end{enumerate}

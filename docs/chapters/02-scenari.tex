@@ -45,12 +45,17 @@ nei frame falsi. Le cinque funzioni di test vengono poi invocate in sequenza.
 Tutti e cinque gli scenari condividono la stessa struttura di fondo:
 si sceglie una funzione bersaglio e la si invoca attraverso un meccanismo
 di chiamata diverso, osservando come cambia la visibilità della chiamata
-agli strumenti di analisi. Le due funzioni bersaglio presenti nel binario
-sono \texttt{SecretFunction}, che simula un'operazione sensibile e cattura
-internamente il proprio backtrace, e \texttt{LaunchNotepad}, che avvia
-\texttt{notepad.exe} tramite \texttt{CreateProcessW}. Il codice e il
-comportamento di ciascuna sono analizzati nelle sezioni degli scenari
-che le impiegano.
+agli strumenti di analisi. Le due funzioni bersaglio simulano operazioni
+tipiche del payload di un worm: \texttt{SecretFunction} esegue un'allocazione
+di memoria eseguibile e cattura internamente il proprio backtrace;
+\texttt{LaunchNotepad} crea un processo figlio tramite \texttt{CreateProcessW}.
+Gli scenari 1--4 impiegano \texttt{SecretFunction}: l'obiettivo è misurare
+come cambia il backtrace in-process al variare della tecnica di spoofing.
+Lo Scenario~5 la sostituisce con \texttt{LaunchNotepad} perché sul fake stack
+\texttt{CaptureStackBackTrace} restituirebbe comunque 0 frame --- lo stesso
+risultato di Scenario~4, senza informazioni nuove. La funzione bersaglio
+diventa quindi \texttt{CreateProcessW}: è l'operazione che genera l'evento
+Sysmon EID~1, il vettore di rilevamento specifico che Scenario~5 analizza.
 
 \paragraph{Stub assembly.}
 Manipolare direttamente SP, FP (\texttt{x29}) e LR (\texttt{x30}) da codice
