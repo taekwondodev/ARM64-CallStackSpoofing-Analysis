@@ -9,11 +9,11 @@ comes from the following repository, used without modifications:
 https://github.com/xaitax/ARM64-CallStackSpoofing
 
 This repository is NOT an official GitHub fork. It extends the original source
-with a thesis document and real execution artifacts.
+with a lab report document and real execution artifacts.
 
 ## What This Repository Adds
 
-- Thesis document (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis
+- Lab report (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis
   of all 5 scenarios, defensive detection analysis (user-mode walker limits and
   MDE kernel-mode coverage), attacker/defender tradeoffs
 - Real execution artifacts per scenario: WinDbg stack traces,
@@ -36,7 +36,7 @@ with a thesis document and real execution artifacts.
 stack_spoof_arm64.c     — original framework source
 stack_spoof_arm64.asm   — original framework source
 build.bat               — original build script
-docs/                   — thesis source (LaTeX) and compiled PDF
+docs/                   — lab report source (LaTeX) and compiled PDF
 artifacts/              — raw captures from each scenario
 ```
 
