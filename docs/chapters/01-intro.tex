@@ -2,30 +2,45 @@
 \label{ch:intro}
 
 Questo capitolo fornisce il quadro teorico necessario per interpretare i cinque
-scenari del Capitolo~\ref{ch:scenari}. L'attenzione è concentrata sugli aspetti dell'architettura
-ARM64 e delle strutture Windows che influenzano direttamente il call stack spoofing:
-la calling convention, la catena di frame pointer, il segmento \texttt{.pdata} e
-il Thread Environment Block come guardia di validazione dello stack.
+scenari del Capitolo~\ref{ch:scenari}. L'attenzione è concentrata sugli aspetti
+dell'architettura ARM64 e delle strutture Windows che influenzano direttamente
+il call stack spoofing: il layout della memoria di processo (VAS, VAD,
+\texttt{ntdll.dll}), la calling convention, la catena di frame pointer, il
+segmento \texttt{.pdata} e la validazione dei limiti dello stack tramite il
+Thread Environment Block.
 
 % ── 1.1 Layout della Memoria di Processo su Windows ──────────────────────────
 
 \section{Layout della Memoria di Processo su Windows}
 
-Un processo Windows su piattaforma ARM64 dispone di uno spazio di indirizzi
-virtuali a 48 bit: i 128~TB dello spazio utente occupano l'intervallo
-\texttt{0x0000000000000000}--\texttt{0x00007FFFFFFFFFFF}. All'interno di questo
-spazio, il loader mappa le regioni principali illustrate in
-Tabella~\ref{tab:mem-layout}.
+Ogni processo Windows dispone di un proprio \emph{Virtual Address Space} (VAS):
+uno spazio di indirizzi virtuali isolato, gestito dal kernel, che crea per ogni
+processo l'illusione di avere accesso esclusivo alla memoria. Gli indirizzi
+virtuali non corrispondono direttamente alla memoria fisica: è il Memory Manager
+del kernel a tradurre ogni accesso tramite le page table, garantendo l'isolamento
+tra processi in modo trasparente al codice user-mode.
 
-\begin{table}[htbp]
+Su piattaforma ARM64, sebbene i registri siano a 64 bit, l'hardware implementa
+fisicamente solo 48 linee di indirizzamento. La convenzione ARM64
+(\emph{canonical address}) impone che i bit 63:48 siano l'estensione di segno
+del bit~47: indirizzi con bit~47~=~0 (bit superiori tutti zero) appartengono
+allo spazio utente; indirizzi con bit~47~=~1 (bit superiori tutti uno, prefisso
+\texttt{0xFFFF8...}) appartengono al kernel. Qualsiasi altro pattern genera un
+fault della CPU. Lo spazio utente dispone quindi di $2^{47}$~=~128~TB,
+dall'indirizzo \texttt{0x0000000000000000} al massimo indirizzo con bit~47~=~0:
+\texttt{0x00007FFFFFFFFFFF}. All'interno di questo spazio, il loader mappa le
+regioni principali illustrate in Tabella~\ref{tab:mem-layout}.
+
+\begin{table}[H]
 \centering
 \begin{tabular}{lp{9cm}}
 \toprule
 Regione & Contenuto e caratteristiche \\
 \midrule
 Stack del thread   & Cresce verso indirizzi decrescenti. Dimensione di default 1~MB
-                     (espandibile). Allocata dal kernel; i limiti sono registrati
-                     nel TEB (\texttt{StackBase}, \texttt{StackLimit}). \\
+                     (espandibile). Allocata dal kernel; tipo \texttt{MEM\_STACK}.
+                     I limiti sono registrati nel TEB (\texttt{StackBase},
+                     \texttt{StackLimit}). \\
 Heap               & Allocazioni dinamiche via \texttt{HeapAlloc} /
                      \texttt{VirtualAlloc}. Più heap possono coesistere; tipo
                      \texttt{MEM\_PRIVATE}. \\
@@ -40,9 +55,34 @@ TEB / PEB          & Strutture per-thread e per-processo mappate dal kernel.
 \label{tab:mem-layout}
 \end{table}
 
+Tra i moduli caricati in ogni processo, \texttt{ntdll.dll} occupa un ruolo
+privilegiato: è la DLL di sistema più bassa del mondo user-mode, mappata
+automaticamente dal kernel prima ancora che il processo parta. Contiene tre
+categorie di funzioni: gli stub delle system call (\texttt{Nt*}/\texttt{Zw*}),
+che eseguono la transizione verso il kernel; la runtime library (\texttt{Rtl*}),
+che include \texttt{RtlVirtualUnwind} e le primitive per la gestione delle
+eccezioni; il loader (\texttt{Ldr*}), responsabile del caricamento delle altre
+DLL. Essendo presente in ogni processo Windows e contenendo migliaia di call
+site con record \texttt{.pdata} validi, \texttt{ntdll.dll} sarà la fonte dei
+gadget utilizzati nei cinque scenari del Capitolo~\ref{ch:scenari}.
+
+Il kernel traccia ogni regione allocata nel VAS attraverso una struttura dati
+denominata \emph{Virtual Address Descriptor} (VAD): un albero rosso-nero
+radicato in \texttt{EPROCESS} in cui ogni nodo descrive un intervallo di
+indirizzi con il tipo di allocazione (\texttt{MEM\_STACK}, \texttt{MEM\_PRIVATE},
+\texttt{MEM\_MAPPED}, \texttt{MEM\_IMAGE}) e i permessi di accesso. Da user-mode,
+\texttt{VirtualQuery()} interroga il VAD e restituisce queste informazioni per
+qualsiasi indirizzo del processo. Il kernel assegna automaticamente il tipo
+\texttt{MEM\_STACK} allo stack di sistema di ogni thread; le regioni allocate con
+\texttt{VirtualAlloc} ricevono invece il tipo \texttt{MEM\_PRIVATE}. Questa
+distinzione è rilevante per il rilevamento dello stack pivot: un fake stack
+allocato con \texttt{VirtualAlloc} è strutturalmente distinguibile dallo stack
+di sistema tramite \texttt{VirtualQuery}, indipendentemente dai valori contenuti
+nel TEB (Sezione~\ref{sec:teb}).
+
 ASLR (Address Space Layout Randomization) è attivo per default su Windows 11:
-la base di ogni modulo cambia ad ogni run, mentre i relativi (RVA) restano
-costanti.
+la base di ogni modulo cambia ad ogni run, mentre i relativi offset (RVA)
+restano costanti.
 
 % ── 1.2 Calling Convention ARM64 su Windows ──────────────────────────────────
 
@@ -52,7 +92,7 @@ La Windows ARM64 ABI (Application Binary Interface) differisce significativament
 dalla Microsoft x86\_64 ABI \cite{msarm64abi}. La Tabella~\ref{tab:abi-compare}
 ne sintetizza le differenze rilevanti per l'analisi dello stack.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -120,7 +160,7 @@ imposta \texttt{x29 = SP}, ancorandolo al top del frame appena costruito.
 Al termine dell'esecuzione del prologo, la memoria attorno a SP forma la
 struttura mostrata in Tabella~\ref{tab:frame-layout}.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -158,11 +198,18 @@ gadget validi sono esclusivamente agli indirizzi di inizio istruzione, riducendo
 (ma non eliminando) la superficie di selezione.
 
 \paragraph{Assenza della \texttt{RET} a 1 byte.}
-In x86\_64, la singola byte \texttt{0xC3} (\texttt{RET}) è sufficiente come
-gadget per mettere fine a una ROP chain. Su ARM64 l'istruzione equivalente è
-\texttt{RET} (alias di \texttt{BR x30}), encodificata come \texttt{0xD65F03C0}:
-4 byte, non divisibile, sempre allineata. I gadget ARM64 devono essere scelti
-tra istruzioni reali, non tra sequenze di byte casuali.
+Su x86\_64 le istruzioni hanno lunghezza variabile: il byte \texttt{0xC3}
+corrisponde a \texttt{RET} e compare frequentemente anche nel mezzo di
+istruzioni più lunghe, a offset non allineati. Un attaccante può puntare a
+qualsiasi occorrenza di quel byte in memoria e ottenere un gadget \texttt{RET}
+funzionante senza che quel byte sia mai stato scritto come istruzione autonoma.
+Su ARM64 questo meccanismo non esiste: l'allineamento a 4 byte impedisce di
+leggere istruzioni a offset arbitrari, quindi \texttt{RET} (alias
+\texttt{BR x30}, encoding \texttt{0xD65F03C0}) deve essere presente come
+istruzione reale a un indirizzo allineato — non è ricavabile da sequenze di
+byte casuali. I gadget ARM64 sono quindi meno abbondanti, ma non eliminati:
+devono essere cercati esplicitamente tra le istruzioni reali del codice di
+sistema.
 
 \paragraph{LR come registro, non come valore sullo stack.}
 Su x86\_64, al momento dell'istruzione \texttt{CALL}, il return address è già
@@ -210,7 +257,7 @@ dover eseguire l'epilogo: è il meccanismo su cui si basa il walker
 Il processo di stack walking tramite \texttt{.pdata} segue i passi mostrati
 in Tabella~\ref{tab:pdata-walk}.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{cp{10cm}}
 \toprule
@@ -239,7 +286,7 @@ correttamente, comparendo come frame intermedio in \texttt{CaptureStackBackTrace
 
 % ── 1.6 Il TEB come Guardia dello Stack ──────────────────────────────────────
 
-\section{Il TEB come Guardia dello Stack}
+\section{Il TEB e la Validazione dei Limiti dello Stack}
 \label{sec:teb}
 
 Il Thread Environment Block (TEB) è una struttura kernel allocata per ogni
@@ -276,7 +323,7 @@ potrebbe in linea di principio aggiornare \texttt{StackBase} e
 però una firma rilevabile a livello di tipo di allocazione: il kernel assegna
 allo stack di sistema il tipo \texttt{MEM\_STACK}, mentre una regione
 \texttt{VirtualAlloc} è di tipo \texttt{MEM\_PRIVATE}. Le implicazioni
-difensive sono analizzate nella Sezione~3.4.
+difensive sono analizzate nel Capitolo~\ref{ch:conclusioni}.
 
 % ── 1.7 Ambiente di Laboratorio ──────────────────────────────────────────────
 

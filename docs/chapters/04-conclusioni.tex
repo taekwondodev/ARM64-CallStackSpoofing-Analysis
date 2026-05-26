@@ -13,7 +13,7 @@ difensore, quale strategia è ottimale e perché.
 La Tabella~\ref{tab:attacker-tradeoff} sintetizza il rapporto costo/beneficio
 di ogni scenario dal punto di vista offensivo.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \small
 \begin{tabular}{lp{1.8cm}p{1.8cm}p{2.4cm}p{2.0cm}p{2.4cm}}
@@ -69,11 +69,13 @@ Ogni tecnica analizzata lascia almeno un segnale che non può essere eliminato
 senza introdurre una firma alternativa di pari o maggiore visibilità.
 
 \paragraph{SP fuori \texttt{[TEB.StackLimit, TEB.StackBase]} (Scenari~4 e~5).}
-L'unico modo per mascherare questa anomalia è sovrascrivere manualmente
-\texttt{TEB.StackBase} e \texttt{TEB.StackLimit} — operazione legale in
-user-mode, ma che trasforma il tipo di regione da \texttt{MEM\_STACK} a
-\texttt{MEM\_PRIVATE}, sostituendo una firma con un'altra. Entrambe le firme
-non sono eliminabili contemporaneamente senza privilegi kernel.
+Sovrascrivere \texttt{TEB.StackBase} e \texttt{TEB.StackLimit} per coprire il
+fake stack elimina la firma SP fuori bounds, ma introduce una seconda firma: la
+regione coperta dal TEB modificato ha tipo \texttt{MEM\_PRIVATE} nel VAD
+(allocata con \texttt{VirtualAlloc}), non \texttt{MEM\_STACK} come uno stack di
+sistema. Un difensore che interroghi il VAD tramite \texttt{VirtualQuery} vede
+la discrepanza. Le due firme non sono eliminabili contemporaneamente senza
+modificare le VAD entries — strutture kernel non accessibili da user-mode.
 
 \paragraph{RetAddr nullo in posizione non terminale (Scenario~2).}
 La troncatura della catena \texttt{.pdata} produce un RetAddr nullo prima dei
@@ -90,7 +92,7 @@ autorizzati), ma non è eliminabile dall'attaccante.
 
 \section{Tradeoff del Difensore: Copertura vs Costo}
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \small
 \begin{tabular}{lp{3cm}p{2cm}p{4cm}}

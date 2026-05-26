@@ -97,10 +97,12 @@ dall'integrità e completezza dei metadati \texttt{.pdata}.
 Walker ibrido che combina la catena \texttt{x29}/\texttt{x30} con i record
 \texttt{.pdata}. Le righe evidenziate in giallo indicano frame che il walker
 non riesce a risolvere completamente. Nello scenario baseline corrispondono a
-funzioni \emph{inlinate} dal compilatore: non sono funzioni leaf (una funzione
-leaf possiede comunque un record \texttt{.pdata} e appare come frame distinto),
-ma funzioni il cui codice è stato fuso nel frame del chiamante, senza un record
-separato. Negli scenari di spoofing il giallo indica frame anomali o irrisolvibili.
+funzioni \emph{inlinate} dal compilatore: non sono funzioni leaf (MSVC emette
+un record \texttt{.pdata} anche per le funzioni leaf, che appaiono quindi come
+frame distinti; le funzioni inlinate non hanno né frame proprio né record
+separato — il requisito ABI di \texttt{.pdata} vale per le non-leaf, ma MSVC
+lo estende a tutte le funzioni per supportare il debugging),
+ma funzioni il cui codice è stato fuso nel frame del chiamante. Negli scenari di spoofing il giallo indica frame anomali o irrisolvibili.
 
 \paragraph{\texttt{CaptureStackBackTrace}.}
 Funzione Win32 invocata dall'interno di \texttt{SecretFunction}: percorre la
@@ -216,7 +218,7 @@ ancora scritto il proprio frame.
 I frame della catena, estratti dall'output di \texttt{k}, occupano le seguenti
 aree di stack (Tabella~\ref{tab:sc1-frames}):
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -276,7 +278,7 @@ La catena CRT è risolvibile senza interruzioni fino a \texttt{RtlUserThreadStar
 08 00000007`0d6ffdd0 00000000`00000000 ntdll!RtlUserThreadStart+0x44
 \end{lstlisting}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario1/systeminformer-stack.png}
   \caption{System Informer — stack del thread principale con WinDbg in pausa
@@ -289,7 +291,7 @@ La catena CRT è risolvibile senza interruzioni fino a \texttt{RtlUserThreadStar
 La Tabella~\ref{tab:sc1-tools} mostra come tre diversi stack walker producano
 risultati differenti sullo stesso stack legittimo.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lp{2.8cm}p{7cm}}
 \toprule
@@ -419,7 +421,7 @@ Al breakpoint (prima del prologo di \texttt{SecretFunction}),
 SP~=~\texttt{0x0000006A\,8ECFFA50}. La Tabella~\ref{tab:sc2-stack} annota le
 posizioni chiave nel dump.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -469,7 +471,7 @@ legittima.
 [05] RtlUserThreadStart               + 0x0044
 \end{lstlisting}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario2/systeminformer-stack.png}
   \caption{System Informer — Scenario 2. Solo 2 frame visibili (entrambi
@@ -589,7 +591,7 @@ Al breakpoint su \texttt{SecretFunction} (entry, prologo non ancora eseguito),
 SP~=~\texttt{0x0000000b\,1599f620}. La Tabella~\ref{tab:sc3-stack} annota le
 posizioni chiave nel dump.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -653,7 +655,7 @@ legittime.
 [09] RtlUserThreadStart               + 0x0044
 \end{lstlisting}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario3/systeminformer-stack.png}
   \caption{System Informer — Scenario 3 (thread 5300). Solo 3 frame visibili,
@@ -665,7 +667,7 @@ legittime.
 
 \paragraph{Confronto tra strumenti (Tabella~\ref{tab:sc3-tools}).}
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lp{2.2cm}p{7.4cm}}
 \toprule
@@ -798,7 +800,7 @@ Al breakpoint su \texttt{SecretFunction} (entry, prologo non ancora eseguito),
 SP~=~\texttt{0x0000028d\,fa63ffe0}. La Tabella~\ref{tab:sc4-stack} documenta
 il layout del fake stack al momento del BP.
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -821,7 +823,7 @@ Offset da SP & Valore & Significato \\
 
 Il confronto con il TEB è determinante (Tabella~\ref{tab:sc4-teb}):
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -833,7 +835,7 @@ SP corrente  & \texttt{0x0000028d\,fa63ffe0} & \textbf{Fuori intervallo} — fak
 \bottomrule
 \end{tabular}
 \caption{SP al BP vs.\ limiti TEB (Scenario 4). SP si trova a circa
-         \texttt{0x1E5\,35C3FFE0} byte sopra \texttt{StackBase}: una distanza
+         \texttt{0x1EA\,8CF3FFE0} byte sopra \texttt{StackBase}: una distanza
          impossibile per un normale stack overflow e immediatamente rilevabile
          da qualsiasi validazione dell'intervallo.}
 \label{tab:sc4-teb}
@@ -855,7 +857,7 @@ WARNING: Stack pointer is outside the normal stack bounds.
 01 0000028d`fa63ffe0 00000000`00000000     stack_spoof!ExecuteWithFakeFrame+0x54
 \end{lstlisting}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario4/systeminformer-stack.png}
   \caption{System Informer — Scenario 4 (thread 5544). 2 frame gialli;
@@ -867,7 +869,7 @@ WARNING: Stack pointer is outside the normal stack bounds.
 
 \paragraph{Confronto tra strumenti (Tabella~\ref{tab:sc4-tools}).}
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lp{2.2cm}p{7.4cm}}
 \toprule
@@ -956,7 +958,7 @@ Al breakpoint su \texttt{LaunchNotepad} (entry, prologo non ancora eseguito),
 SP~=~\texttt{0x00000242\,f344ffe0}. Il layout è identico a Scenario~4
 (Tabella~\ref{tab:sc5-stack}).
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \begin{tabular}{lll}
 \toprule
@@ -1003,7 +1005,7 @@ ParentImage:     ...\stack_spoof.exe
 ParentCommandLine: stack_spoof.exe
 \end{lstlisting}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario5/systeminformer-stack.png}
   \caption{System Informer — Scenario 5 (thread 5508). 2 frame gialli:
