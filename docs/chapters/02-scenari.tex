@@ -100,7 +100,7 @@ non riesce a risolvere completamente. Nello scenario baseline corrispondono a
 funzioni \emph{inlinate} dal compilatore: non sono funzioni leaf (MSVC emette
 un record \texttt{.pdata} anche per le funzioni leaf, che appaiono quindi come
 frame distinti; le funzioni inlinate non hanno né frame proprio né record
-separato — il requisito ABI di \texttt{.pdata} vale per le non-leaf, ma MSVC
+separato. Il requisito ABI di \texttt{.pdata} vale per le non-leaf, ma MSVC
 lo estende a tutte le funzioni per supportare il debugging),
 ma funzioni il cui codice è stato fuso nel frame del chiamante. Negli scenari di spoofing il giallo indica frame anomali o irrisolvibili.
 
@@ -573,8 +573,8 @@ sono invariati.
 
 \texttt{RecursiveSpoofHelper} è dichiarata \texttt{\_\_declspec(noinline)}: MSVC
 emette un record \texttt{RUNTIME\_FUNCTION} completo, rendendo ogni suo frame
-unwindable da \texttt{RtlVirtualUnwind}. Questa proprietà — che in Scenario~2
-era irrilevante perché \texttt{RecursiveSpoofHelper} non esisteva — diventa ora
+unwindable da \texttt{RtlVirtualUnwind}. Questa proprietà che in Scenario~2
+era irrilevante perché \texttt{RecursiveSpoofHelper} non esisteva, diventa ora
 determinante per la divergenza tra walker.
 
 La catena \texttt{.pdata} dei tre livelli è: \texttt{RecursiveSpoofHelper} →
@@ -903,8 +903,8 @@ durante lo stack walk: verifica che SP sia compreso in
 e il walker restituisce zero frame.
 
 \texttt{ExecuteWithFakeFrame} non può mascherare questa anomalia perché agisce
-a livello di registro SP — un registro privilegiato che il TEB non aggiorna
-automaticamente. Aggiornare manualmente \texttt{TEB.StackBase}/\texttt{StackLimit}
+a livello di registro SP (un registro privilegiato che il TEB non aggiorna
+automaticamente). Aggiornare manualmente \texttt{TEB.StackBase}/\texttt{StackLimit}
 richiederebbe scrittura nel TEB (scrivibile ma monitorabile), e in ogni caso
 produrrebbe un intervallo di stack corrispondente alla memoria \texttt{VirtualAlloc},
 che un EDR potrebbe marcare come sospetto per tipo di allocazione

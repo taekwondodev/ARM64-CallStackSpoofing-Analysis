@@ -111,12 +111,12 @@ Dimensione istruzione       & 4 byte fissi             & 1--15 byte variabile \\
                             & \texttt{x19}--\texttt{x28}, \texttt{x29}, \texttt{SP} &
                               \texttt{rbx}, \texttt{rbp}, \texttt{rdi}, \texttt{rsi}, \texttt{r12}--\texttt{r15} \\
 \midrule
-\multicolumn{3}{l}{\emph{Registro x30 (LR) — semantica ``Both''}} \\
+\multicolumn{3}{l}{\emph{Semantica del Registro x30 (LR)}} \\
 \midrule
-                            & \multicolumn{2}{p{10cm}}{x30 è \emph{volatile} dal punto di vista del caller
-                              (distrutto da qualsiasi \texttt{BL}/\texttt{BLR}), ma il callee è responsabile
-                              di salvarlo prima di eseguire nested calls. Non appartiene ai registri
-                              non-volatile, ma è il callee — non il caller — a doverlo preservare.} \\
+                            & \multicolumn{2}{p{10cm}}{Il registro x30 risulta volatile dal punto di vista del caller 
+                              (in quanto viene sovrascritto da istruzioni \texttt{BL}/\texttt{BLR}), ma ricade sotto la 
+                              responsabilità del callee preservarlo prima di eseguire chiamate nidificate. Sebbene non appartenga 
+                              ai registri non-volatile in senso stretto, l'obbligo di conservazione spetta alla funzione chiamata.} \\
 \bottomrule
 \end{tabular}
 \caption{Confronto tra la Windows ARM64 ABI e la Microsoft x86\_64 ABI
@@ -205,19 +205,17 @@ qualsiasi occorrenza di quel byte in memoria e ottenere un gadget \texttt{RET}
 funzionante senza che quel byte sia mai stato scritto come istruzione autonoma.
 Su ARM64 questo meccanismo non esiste: l'allineamento a 4 byte impedisce di
 leggere istruzioni a offset arbitrari, quindi \texttt{RET} (alias
-\texttt{BR x30}, encoding \texttt{0xD65F03C0}) deve essere presente come
-istruzione reale a un indirizzo allineato — non è ricavabile da sequenze di
-byte casuali. I gadget ARM64 sono quindi meno abbondanti, ma non eliminati:
-devono essere cercati esplicitamente tra le istruzioni reali del codice di
-sistema.
+\texttt{BR x30}, encoding \texttt{0xD65F03C0}) deve essere presente in forma 
+esplicita a un indirizzo allineato, poiché non è ricavabile da sequenze casuali di byte. I gadget 
+ARM64 risultano quindi meno numerosi e devono essere cercati all'interno delle istruzioni 
+reali del codice di sistema.
 
 \paragraph{LR come registro, non come valore sullo stack.}
 Su x86\_64, al momento dell'istruzione \texttt{CALL}, il return address è già
 in cima allo stack: un attaccante con scrittura arbitraria nello stack può
 sovrascrivere immediatamente il valore. Su ARM64, \texttt{x30} è un registro;
 viene scritto nello stack solo nel prologo della funzione chiamata. L'attacco
-deve quindi agire \emph{dopo} il prologo — modificando il valore già salvato
-— oppure costruire un frame falso che presenti un LR controllato
+deve quindi agire \emph{dopo} il prologo, modificando il valore già salvato, oppure costruire un frame falso che presenti un LR controllato
 dall'attaccante al momento dello stack walk.
 
 \paragraph{Registro \texttt{x18} riservato al TEB.}
@@ -281,7 +279,7 @@ contenga istruzioni di modifica di SP al di fuori del prologo canonico non è
 coperta da alcun record \texttt{RUNTIME\_FUNCTION}. Quando il walker raggiunge
 quel PC, la ricerca in \texttt{.pdata} fallisce e la catena viene troncata,
 producendo un RetAddr nullo. Un gadget ntdll scelto come LR falso è invece
-coperto da un record valido — è codice di sistema — e viene attraversato
+coperto da un record valido perché è codice di sistema e viene attraversato
 correttamente, comparendo come frame intermedio in \texttt{CaptureStackBackTrace}.
 
 % ── 1.6 Il TEB come Guardia dello Stack ──────────────────────────────────────
@@ -340,17 +338,17 @@ dal rilevamento degli stack walker user-mode.
 
 \paragraph{Macchina virtuale.}
 \begin{itemize}
-  \item \textbf{Hypervisor} — VMware Fusion su macOS Apple Silicon.
-  \item \textbf{Sistema operativo} — Windows 11 ARM64, versione 25H2v2,
+  \item \textbf{Hypervisor}: VMware Fusion su macOS Apple Silicon.
+  \item \textbf{Sistema operativo}: Windows 11 ARM64, versione 25H2v2,
         build 26200.8037.
-  \item \textbf{Risorse} — 2 vCPU Apple Silicon, 4~GB di RAM.
+  \item \textbf{Risorse}: 2 vCPU Apple Silicon, 4~GB di RAM.
 \end{itemize}
 
 \paragraph{Software installato.}
 \begin{itemize}
-  \item \textbf{Git for Windows} — per clonare la repository dalla VM.
+  \item \textbf{Git for Windows} per clonare la repository dalla VM.
   \item \textbf{Visual Studio} con i componenti \emph{Sviluppo di applicazioni
-        desktop con C++} e \emph{ARM64 Native Tools} — per il toolchain di
+        desktop con C++} e \emph{ARM64 Native Tools} per il toolchain di
         compilazione e linking ARM64.
 \end{itemize}
 
@@ -361,28 +359,34 @@ l'esecuzione del binario senza interferenze sono state applicate le seguenti
 modifiche tramite l'interfaccia \emph{Windows Security}:
 
 \begin{itemize}
-  \item \textbf{Tamper Protection disabilitata} — impedisce la modifica delle
+  \item \textbf{Tamper Protection disabilitata} per impedire la modifica delle
         impostazioni di Defender da parte di processi non autorizzati; disabilitata
         per permettere la configurazione delle esclusioni successive.
-  \item \textbf{Smart App Control disabilitato} — funzionalità di Windows~11 che
-        blocca applicazioni non firmate o con reputazione sconosciuta; disabilitata
-        in quanto il binario è compilato localmente senza firma digitale.
-  \item \textbf{Esclusione della directory} — la cartella contenente la repository
+  \item \textbf{Smart App Control disabilitato} in quanto il binario è compilato localmente senza firma digitale.
+  \item \textbf{Esclusione della directory}. La cartella contenente la repository
         clonata è stata aggiunta alle esclusioni di Defender per impedire la
         quarantena automatica del binario durante compilazione ed esecuzione.
 \end{itemize}
 
 \paragraph{Strumenti di analisi.}
 \begin{itemize}
-  \item \textbf{WinDbg} — walker \texttt{.pdata} e breakpoint per ispezione
+  \item \textbf{WinDbg}: walker \texttt{.pdata} e breakpoint per ispezione
         dello stack a basso livello.
-  \item \textbf{System Informer} — stack view in-process per visualizzazione
+  \item \textbf{System Informer}: stack view in-process per visualizzazione
         del backtrace dal punto di vista del processo.
-  \item \textbf{Sysmon} — event logging di sistema per il tracciamento di
+  \item \textbf{Sysmon}: event logging di sistema per il tracciamento di
         creazione di processi e allocazioni di memoria.
-  \item \textbf{CaptureStackBackTrace} — API Windows richiamata direttamente
+  \item \textbf{CaptureStackBackTrace}: API Windows richiamata direttamente
         dal binario per misurare i frame visibili a runtime.
 \end{itemize}
+
+\paragraph{Strumento di difesa.}
+Microsoft Defender for Endpoint è la soluzione EDR enterprise impiegata nel
+laboratorio come strumento di difesa contro il call stack spoofing. Opera
+tramite sensori kernel-mode e fornisce la prospettiva del difensore sui
+comportamenti rilevati durante l'esecuzione dei cinque scenari. Il suo
+funzionamento e i risultati dell'analisi sono trattati nel
+Capitolo~\ref{ch:difensiva}.
 
 \paragraph{Ottenere il worm simulato.}
 Nella directory esclusa da Defender:

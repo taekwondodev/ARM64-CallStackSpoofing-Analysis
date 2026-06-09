@@ -66,3 +66,4 @@ docs/*.fdb_latexmk
 docs/*.synctex.gz
 docs/chapters/*.aux
 CLAUDE.md
+.claude/HANDOFF.md

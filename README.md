@@ -1,4 +1,10 @@
+<div align="center">
+
 # ARM64 Call Stack Spoofing — Analysis
+
+[![PDF Report](https://img.shields.io/badge/PDF-Report-red)](https://github.com/taekwondodev/ARM64-CallStackSpoofing/raw/main/docs/main.pdf)
+
+</div>
 
 Analysis of 5 call stack spoofing techniques on Windows 11 ARM64.
 
@@ -13,7 +19,7 @@ with a lab report document and real execution artifacts.
 
 ## What This Repository Adds
 
-- Lab report (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis
+- [Lab report](https://github.com/taekwondodev/ARM64-CallStackSpoofing/raw/main/docs/main.pdf) (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis
   of all 5 scenarios, defensive detection analysis (user-mode walker limits and
   MDE kernel-mode coverage), attacker/defender tradeoffs
 - Real execution artifacts per scenario: WinDbg stack traces,
