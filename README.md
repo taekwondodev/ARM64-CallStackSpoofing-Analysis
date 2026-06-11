@@ -6,24 +6,24 @@
 
 </div>
 
-Analysis of 5 call stack spoofing techniques on Windows 11 ARM64.
+Analysis of 3 call stack spoofing techniques on Windows 11 ARM64.
 
 ## Original Framework
 
 The framework source code (`stack_spoof_arm64.c`, `stack_spoof_arm64.asm`, `build.bat`)
-comes from the following repository, used without modifications:
-https://github.com/xaitax/ARM64-CallStackSpoofing
+comes from the following repository: https://github.com/xaitax/ARM64-CallStackSpoofing
 
 This repository is NOT an official GitHub fork. It extends the original source
 with a lab report document and real execution artifacts.
 
 ## What This Repository Adds
 
+- Multi-frame recursion modified: it uses SpoofCallStack also for the base case, walker based on .pdata don't see the helper function as top stack frame. 
 - [Lab report](https://github.com/taekwondodev/ARM64-CallStackSpoofing/raw/main/docs/main.pdf) (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis
-  of all 5 scenarios, defensive detection analysis (user-mode walker limits and
+  of all scenarios, defensive detection analysis (user-mode walker limits and
   MDE kernel-mode coverage), attacker/defender tradeoffs
 - Real execution artifacts per scenario: WinDbg stack traces,
-  CaptureStackBackTrace output, System Informer captures, Sysmon EID 1 logs
+  CaptureStackBackTrace output, System Informer captures.
 - Detection coverage matrix: per-tool, per-scenario, with privilege level required
 
 ## Scenarios

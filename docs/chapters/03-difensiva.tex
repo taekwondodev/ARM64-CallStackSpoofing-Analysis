@@ -26,7 +26,7 @@ in kernel-mode.
 \begin{table}[H]
 \centering
 \small
-\begin{tabular}{lp{3.2cm}p{3.2cm}p{2.5cm}p{2cm}}
+\begin{tabular}{lp{3.2cm}p{3.2cm}p{2.5cm}p{2.8cm}}
 \toprule
 Scenario & Firma chiave & Meccanismo difesa & Livello minimo & Efficacia \\
 \midrule
@@ -105,7 +105,7 @@ Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informe
 \midrule
 1 Baseline        & 4 frame reali & 9 frame & 8 frame & N/A \\
 2 Single-Frame    & 6 frame (gadget visibile) & 2 frame + null & 2 frame gialli & N/A \\
-3 Multi-Frame     & 10 frame (gadget interleaved) & 3 frame + null & 3 frame gialli & N/A \\
+3 Multi-Frame     & 10 frame (gadget a \texttt{[01]}, \texttt{RSH+0x0030} a \texttt{[02]}) & 2 frame + null & 3 frame gialli & N/A \\
 4 Stack Pivot     & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & N/A \\
 5 Spoofed Launch  & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & \texttt{ParentImage} rilevabile \\
 \bottomrule
@@ -117,16 +117,20 @@ Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informe
 \end{table}
 
 Il dato più rilevante è Scenario~3: \texttt{CaptureStackBackTrace} restituisce
-10 frame con gadget ntdll interleaved tra frame reali di
-\texttt{RecursiveSpoofHelper}, SP rimane all'interno dei limiti TEB, e la
-catena \texttt{x29} è formalmente integra. Nessuno strumento user-mode produce
-una firma anomala — la catena spoofata è \emph{strutturalmente identica} a
-una chiamata legittima. Questo è il caso limite che nessun walker user-mode
-può risolvere senza conoscenza \emph{a priori} della call chain reale.
+10 frame con gadget ntdll e frame reali di \texttt{RecursiveSpoofHelper}, SP
+rimane all'interno dei limiti TEB, e la catena \texttt{x29} è formalmente
+integra. WinDbg produce soli 2 frame (identico a Scenario~2): il walker
+\texttt{.pdata} non risale oltre \texttt{SpoofCallStack}. La firma residua
+rilevabile è l'offset \texttt{+0x0030} su \texttt{RecursiveSpoofHelper} al
+frame~[02] del backtrace CBT, distinto dagli offset \texttt{+0x0064} degli
+altri livelli. Questa firma è rilevabile solo da un EDR che analizzi gli offset
+dei frame ricorsivi o conosca il codice: nessun walker user-mode produce
+un'anomalia strutturale (gap nei frame pointer o indirizzi fuori da
+\texttt{.pdata}). Scenario~3 rimane il caso limite più sfidante.
 
 % ── 4.3 Microsoft Defender for Endpoint ──────────────────────────────────────
 
-\section{Microsoft Defender for Endpoint: Rilevamento Kernel-Mode}
+\section{Analisi con Microsoft Defender for Endpoint}
 \label{sec:mde}
 
 I limiti della sezione precedente derivano dalla stessa causa radice: i walker
@@ -147,7 +151,7 @@ antimalware: opera al di sotto del file system e intercetta operazioni su
 memoria eseguibile e moduli caricati.
 
 Il canale di telemetria privilegiato è il provider ETW
-\texttt{Microsoft-Windows-Threat-Intelligence} (ETW-TI). Questo provider è
+\texttt{Microsoft-}\allowbreak\texttt{Windows-}\allowbreak\texttt{Threat-}\allowbreak\texttt{Intelligence} (ETW-TI). Questo provider è
 protetto: accessibile esclusivamente a processi con attributo \emph{Protected
 Process Light} (PPL), impossibile da disabilitare o filtrare da user-mode anche
 con privilegi amministrativi. ETW-TI emette eventi per le syscall
@@ -165,20 +169,20 @@ del thread e non accessibile né modificabile da user-mode. Il campo
 la syscall è stata invocata, indipendentemente da qualsiasi manipolazione
 eseguita prima della syscall stessa.
 
-MDE legge \texttt{TrapFrame.Sp} nel contesto del callback kernel e lo
+{\sloppy MDE legge \texttt{TrapFrame.Sp} nel contesto del callback kernel e lo
 confronta con \texttt{TEB.StackBase} e \texttt{TEB.StackLimit} dello stesso
 thread. Questa verifica è strutturalmente equivalente alla condizione~(\ref{eq:spcheck2}),
 ma con una differenza critica: il valore di SP proviene dal trap frame scritto
 dall'hardware, non da strutture leggibili e sovrascrivibili in user-mode.
 L'attaccante non ha alcun meccanismo per alterare \texttt{TrapFrame.Sp}
-prima della lettura da parte del driver.
+prima della lettura da parte del driver.\par}
 
 \subsection{Copertura per Scenario}
 
 \paragraph{Scenari~4 e~5 — Stack Pivot.}
 Al momento della syscall \texttt{NtAllocateVirtualMemory} (allocazione del
 fake stack) e di \texttt{NtCreateUserProcess} (Scenario~5), il callback
-\texttt{MsSense.sys} legge \texttt{TrapFrame.Sp}. SP vale l'indirizzo del
+\allowbreak\texttt{MsSense.sys} legge \texttt{TrapFrame.Sp}. SP vale l'indirizzo del
 fake stack allocato con \texttt{VirtualAlloc}, esterno all'intervallo TEB.
 Il controllo è deterministico e privo di falsi negativi: nessun programma
 legittimo opera con SP fuori dai bounds TEB durante una syscall. MDE

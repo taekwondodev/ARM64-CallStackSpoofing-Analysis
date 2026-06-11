@@ -329,9 +329,7 @@ difensive sono analizzate nel Capitolo~\ref{ch:conclusioni}.
 \label{sec:ambiente}
 
 Il laboratorio simula le operazioni di evasione di un worm già in esecuzione
-sul sistema target: \texttt{stack\_spoof.exe} esegue allocazioni di memoria
-eseguibile e creazione di processi --- le stesse operazioni che un worm reale
-eseguirebbe per replicarsi --- applicando le tecniche di spoofing descritte nei
+sul sistema target: \texttt{stack\_spoof.exe} invoca funzioni di sistema monitorate dagli stack walker (chiamata a funzione arbitraria negli scenari 1--3 e creazione di un processo nello scenario~5), applicando le tecniche di spoofing descritte nei
 cinque scenari. Il meccanismo di auto-replicazione non è oggetto di questo
 laboratorio: l'analisi è concentrata esclusivamente sulle tecniche di evasione
 dal rilevamento degli stack walker user-mode.
@@ -369,16 +367,10 @@ modifiche tramite l'interfaccia \emph{Windows Security}:
 \end{itemize}
 
 \paragraph{Strumenti di analisi.}
-\begin{itemize}
-  \item \textbf{WinDbg}: walker \texttt{.pdata} e breakpoint per ispezione
-        dello stack a basso livello.
-  \item \textbf{System Informer}: stack view in-process per visualizzazione
-        del backtrace dal punto di vista del processo.
-  \item \textbf{Sysmon}: event logging di sistema per il tracciamento di
-        creazione di processi e allocazioni di memoria.
-  \item \textbf{CaptureStackBackTrace}: API Windows richiamata direttamente
-        dal binario per misurare i frame visibili a runtime.
-\end{itemize}
+Gli strumenti impiegati sono WinDbg, System Informer, Sysmon~EID~1
+e \texttt{Capture\-Stack\-Back\-Trace}; il meccanismo di ciascuno
+è descritto nella Sezione~\ref{sec:strumenti} del
+Capitolo~\ref{ch:scenari}.
 
 \paragraph{Strumento di difesa.}
 Microsoft Defender for Endpoint è la soluzione EDR enterprise impiegata nel
@@ -391,7 +383,7 @@ Capitolo~\ref{ch:difensiva}.
 \paragraph{Ottenere il worm simulato.}
 Nella directory esclusa da Defender:
 \begin{enumerate}
-  \item \texttt{git clone} della repository.
+  \item \texttt{git clone https://github.com/taekwondodev/ARM64-CallStackSpoofing-Analysis.git}
   \item \texttt{cd} nella cartella clonata.
   \item Dall'ambiente \emph{ARM64 Native Tools Command Prompt} di Visual
         Studio, eseguire \texttt{build.bat} per produrre

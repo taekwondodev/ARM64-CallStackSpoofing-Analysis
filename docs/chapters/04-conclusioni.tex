@@ -25,7 +25,7 @@ Complessità
   & Bassa (1 gadget)
   & Media (3 gadget, ricorsione)
   & Alta (pivot SP)
-  & Alta (pivot SP + \texttt{CreateProcessW}) \\
+  & Alta (pivot SP +\newline\texttt{CreateProcessW}) \\
 \addlinespace
 Walker user-mode
   & Catena integra
@@ -68,7 +68,7 @@ rimane superiore.
 Ogni tecnica analizzata lascia almeno un segnale che non può essere eliminato
 senza introdurre una firma alternativa di pari o maggiore visibilità.
 
-\paragraph{SP fuori \texttt{[TEB.StackLimit, TEB.StackBase]} (Scenari~4 e~5).}
+\paragraph{SP fuori dai bounds TEB (Scenari~4 e~5).}\leavevmode\newline
 Sovrascrivere \texttt{TEB.StackBase} e \texttt{TEB.StackLimit} per coprire il
 fake stack elimina la firma SP fuori bounds, ma introduce una seconda firma: la
 regione coperta dal TEB modificato ha tipo \texttt{MEM\_PRIVATE} nel VAD
@@ -79,7 +79,7 @@ modificare le VAD entries — strutture kernel non accessibili da user-mode.
 
 \paragraph{RetAddr nullo in posizione non terminale (Scenario~2).}
 La troncatura della catena \texttt{.pdata} produce un RetAddr nullo prima dei
-frame CRT canonici (\texttt{BaseThreadInitThunk}, \texttt{RtlUserThreadStart}).
+frame CRT canonici (\texttt{BaseThreadInitThunk},\allowbreak{} \texttt{RtlUserThreadStart}).
 Il segnale è sottile — non rilevabile da un singolo walker — ma identificabile
 da una regola sulla profondità minima attesa della catena.
 

@@ -2,8 +2,7 @@
 \label{ch:introduzione}
 
 I tool di sicurezza che operano in user-mode identificano operazioni sospette
-ispezionando la \emph{call stack} al momento in cui avvengono: creazione di
-processi, allocazioni di memoria eseguibile, apertura di handle privilegiati.
+ispezionando la \emph{call stack} al momento in cui avvengono.
 Questa ispezione risale la catena di frame pointer e return address per
 ricostruire la sequenza di chiamate che ha portato all'operazione. Se la call
 chain risultante corrisponde a funzioni di sistema legittime, l'evento è
