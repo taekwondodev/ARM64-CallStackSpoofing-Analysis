@@ -1,7 +1,5 @@
-// TestNormalExecution -- inlined into main() by MSVC /O2
-void TestNormalExecution(void)
+// TestInjectionBaseline -- inlined into main() by MSVC /O2
+void TestInjectionBaseline(void)
 {
-    // ...
-    DWORD result = SecretFunction((LPVOID)0x11111111); // parametro dummy: identifica lo scenario nell'output
-    // ...
+    BOOL result = InjectExplorer(NULL); // chiamata diretta, nessuna manipolazione dello stack
 }

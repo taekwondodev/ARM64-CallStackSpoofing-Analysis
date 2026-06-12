@@ -1,9 +1,13 @@
  # Child-SP          RetAddr               Call Site
-00 0000006a`8ecffa50 00007ff7`af051430     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
-01 0000006a`8ecffa50 00000000`00000000     stack_spoof!SpoofCallStack+0x50
+00 00000056`9c2ffdf0 00007ff6`c0401400     stack_spoof!InjectExplorer [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 190]
+01 00000056`9c2ffdf0 00000000`00000000     stack_spoof!SpoofCallStack+0x50
 
 Notes:
-- ntdll.dll base (this run): 0x00007fff`2e550000
-- stack_spoof.exe base (this run): 0x00007ff7`af040000
-- RetAddr of frame 01 is null -- secondary stack allocation in SpoofCallStack
-  (sub sp, sp, #0x30) is not described in .pdata, breaking WinDbg virtual unwind.
+- ntdll.dll base (this run): 0x00007ffe`81ef0000
+- stack_spoof.exe base (this run): 0x00007ff6`c03f0000
+- 2 frames + null RetAddr. SpoofCallStack+0x50 is the call site visible to
+  .pdata walker: ASM prologue sub sp,sp,#0x30 at offset +0x50 is not covered
+  by .pdata unwind codes, breaking virtual unwind. RetAddr = null.
+- Gadget (0x00007FFE81EF881C = RtlWnfDllUnloadCallback+0x1DFC) is present in
+  the raw stack at SP+0x18 (see windbg-sp-dump.txt) but not followed by walker.
+- SpoofCallStack itself remains visible: partial attribution to stack_spoof.exe.

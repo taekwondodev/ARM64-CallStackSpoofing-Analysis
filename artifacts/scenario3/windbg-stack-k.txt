@@ -1,4 +1,14 @@
  # Child-SP          RetAddr               Call Site
-00 0000000b`1599f620 00007ff7`abf0b784     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
-01 0000000b`1599f620 00007ff7`abf01430     stack_spoof!RecursiveSpoofHelper+0x24 [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 467]
-02 0000000b`1599f640 00000000`00000000     stack_spoof!SpoofCallStack+0x50
+00 00000056`9c2ffaa0 00007ff6`c0401400     stack_spoof!InjectExplorer [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 190]
+01 00000056`9c2ffaa0 00000000`00000000     stack_spoof!SpoofCallStack+0x50
+
+Notes:
+- ntdll.dll base (this run): 0x00007ffe`81ef0000
+- stack_spoof.exe base (this run): 0x00007ff6`c03f0000
+- Output IDENTICAL to Scenario 2: WinDbg .pdata walker cannot distinguish
+  single-frame from multi-frame spoofing. Both terminate at SpoofCallStack+0x50
+  with null RetAddr.
+- SP = 0x00000056`9c2ffaa0 (lower than Sc2 = 0x9c2ffdf0): recursion consumed
+  additional stack space (~0x350 bytes for 2 levels + SpoofCallStack frames).
+- Raw stack dump (windbg-sp-dump.txt) shows multiple ntdll addresses visible,
+  confirming the recursive structure -- but the .pdata walker does not reach them.

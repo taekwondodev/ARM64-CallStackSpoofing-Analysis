@@ -1,10 +1,17 @@
  # Child-SP          RetAddr               Call Site
-00 00000007`0d6ffcc0 00007ff7`1dfece00     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
-01 (Inline Function) --------`--------     stack_spoof!TestNormalExecution+0x70 [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 508]
-02 00000007`0d6ffcc0 00007ff7`1dfedc24     stack_spoof!main+0x260 [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 872]
+00 00000056`9c2ffe60 00007ff6`c040ccac     stack_spoof!InjectExplorer [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 190]
+01 (Inline Function) --------`--------     stack_spoof!TestInjectionBaseline+0x6c [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 541]
+02 00000056`9c2ffe60 00007ff6`c040daf4     stack_spoof!main+0x25c [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 828]
 03 (Inline Function) --------`--------     stack_spoof!invoke_main+0x24 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 78]
-04 00000007`0d6ffd70 00007ff7`1dfee124     stack_spoof!__scrt_common_main_seh+0x11c [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 288]
+04 00000056`9c2ffef0 00007ff6`c040dff4     stack_spoof!__scrt_common_main_seh+0x11c [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 288]
 05 (Inline Function) --------`--------     stack_spoof!__scrt_common_main+0x8 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 330]
-06 00000007`0d6ffdb0 00007fff`4a098740     stack_spoof!mainCRTStartup+0x14 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_main.cpp @ 16]
-07 00000007`0d6ffdc0 00007fff`4ac843e4     KERNEL32!BaseThreadInitThunk+0x40
-08 00000007`0d6ffdd0 00000000`00000000     ntdll!RtlUserThreadStart+0x44
+06 00000056`9c2fff30 00007ffe`812b8740     stack_spoof!mainCRTStartup+0x14 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_main.cpp @ 16]
+07 00000056`9c2fff40 00007ffe`81fc4594     KERNEL32!BaseThreadInitThunk+0x40
+08 00000056`9c2fff50 00000000`00000000     ntdll!RtlUserThreadStart+0x44
+
+Notes:
+- ntdll.dll base (this run): 0x00007ffe`81ef0000
+- stack_spoof.exe base (this run): 0x00007ff6`c03f0000
+- 9 frames total. TestInjectionBaseline is (Inline Function): MSVC /O2 inlined
+  it into main, no separate frame. Full attribution to stack_spoof.exe intact.
+- RetAddr chain is complete through RtlUserThreadStart (null = normal chain end).

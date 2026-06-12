@@ -1,8 +1,8 @@
 \chapter{Analisi Difensiva}
 \label{ch:difensiva}
 
-Il Capitolo~\ref{ch:scenari} ha documentato cinque scenari di call stack spoofing
-producendo, per ciascuno, le evidenze osservate da quattro strumenti distinti.
+Il Capitolo~\ref{ch:scenari} ha documentato quattro scenari di call stack spoofing
+producendo, per ciascuno, le evidenze osservate da tre strumenti distinti.
 Questo capitolo cambia prospettiva: per ogni scenario identifica la firma rilevabile,
 il meccanismo di difesa appropriato e il livello di privilegio richiesto per applicarlo.
 La sezione~\ref{sec:mapping} fornisce il mapping immediato; la sezione~\ref{sec:limiti-walker}
@@ -71,8 +71,8 @@ La distinzione tra \emph{rilevazione} e \emph{blocco} merita un chiarimento
 esplicito. Un tool user-mode che interroghi periodicamente lo stato del thread
 può osservare SP fuori TEB — ma opera in polling, non in modo sincrono rispetto
 all'esecuzione del thread bersaglio. Al momento in cui il tool rileva l'anomalia,
-l'operazione sospetta (ad esempio \texttt{CreateProcessW} in Scenario~5) potrebbe
-essere già completata: il processo figlio esiste, l'effetto è prodotto.
+l'operazione sospetta (ad esempio \texttt{CreateRemoteThread} in Scenario~4) potrebbe
+essere già completata: il thread remoto esiste, l'effetto è prodotto.
 
 Un callback kernel (\texttt{PsSetCreateProcessNotifyRoutineEx}) viene invece
 eseguito \emph{nel contesto del thread chiamante}, prima che il kernel completi
@@ -101,18 +101,16 @@ già introdotti nel Capitolo~\ref{ch:intro}.
 \small
 \begin{tabular}{lp{3cm}p{2.8cm}p{2.8cm}p{2.8cm}}
 \toprule
-Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informer & Sysmon EID~1 \\
+Scenario & \texttt{CaptureStack\-BackTrace} & WinDbg \texttt{k} & System Informer & MDE \\
 \midrule
-1 Baseline        & 4 frame reali & 9 frame & 8 frame & N/A \\
-2 Single-Frame    & 6 frame (gadget visibile) & 2 frame + null & 2 frame gialli & N/A \\
-3 Multi-Frame     & 10 frame (gadget a \texttt{[01]}, \texttt{RSH+0x0030} a \texttt{[02]}) & 2 frame + null & 3 frame gialli & N/A \\
-4 Stack Pivot     & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & N/A \\
-5 Spoofed Launch  & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & \texttt{ParentImage} rilevabile \\
+1 Baseline        & 4 frame reali & 9 frame & 8 frame & da raccogliere \\
+2 Single-Frame    & 6 frame (gadget visibile) & 2 frame + null & 2 frame gialli & da raccogliere \\
+3 Multi-Frame     & 10 frame (gadget a \texttt{[01]}, \texttt{RSH+0x0030} a \texttt{[02]}) & 2 frame + null & 3 frame gialli & da raccogliere \\
+4 Stack Pivot     & 0 (SP invalido) & 2 frame + WARNING & 2 frame gialli & da raccogliere \\
 \bottomrule
 \end{tabular}
-\caption{Visibilità degli stack walker per tutti e cinque gli scenari.
-         N/A indica assenza di creazione di processi; Sysmon EID~1 si applica
-         esclusivamente a eventi di \texttt{CreateProcess}.}
+\caption{Visibilità degli strumenti di analisi per tutti e quattro gli scenari.
+         La colonna MDE riporterà gli alert/block osservati in laboratorio.}
 \label{tab:def-walkers}
 \end{table}
 
@@ -179,9 +177,10 @@ prima della lettura da parte del driver.\par}
 
 \subsection{Copertura per Scenario}
 
-\paragraph{Scenari~4 e~5 — Stack Pivot.}
+\paragraph{Scenario~4 — Stack Pivot.}
 Al momento della syscall \texttt{NtAllocateVirtualMemory} (allocazione del
-fake stack) e di \texttt{NtCreateUserProcess} (Scenario~5), il callback
+fake stack) e di \texttt{NtCreateThreadEx} (\texttt{CreateRemoteThread}
+verso \texttt{explorer.exe}), il callback
 \allowbreak\texttt{MsSense.sys} legge \texttt{TrapFrame.Sp}. SP vale l'indirizzo del
 fake stack allocato con \texttt{VirtualAlloc}, esterno all'intervallo TEB.
 Il controllo è deterministico e privo di falsi negativi: nessun programma

