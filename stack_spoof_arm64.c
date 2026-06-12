@@ -1,34 +1,19 @@
 /*
- * ARM64 Call Stack Spoofing Framework for Windows
- * ================================================
- * Advanced call stack manipulation techniques for ARM64 architecture on Windows
- * 11
+ * ARM64 Call Stack Spoofing — Lab Analysis Tool
+ * ===============================================
+ * Based on the original framework by Alexander Hagenah (@xaitax) — MIT License.
+ * Retained from original: call-site gadget discovery/randomization (CacheCallSites,
+ * GetRandomGadget), stack pivot execution (ExecuteWithFakeFrame, SpoofCallStack ASM).
  *
- * Author: Alexander Hagenah (@xaitax)
- *
- * Description:
- * This framework demonstrates advanced stack spoofing techniques specifically
- * designed for ARM64 Windows systems. It implements call-site gadget discovery,
- * stack pivoting, and multi-frame chain spoofing to evade modern EDR
- * stack-walking analysis.
- *
- * Key Features:
- * - Call-site gadget randomization for signature resistance
- * - Stack pivoting with isolated execution contexts
- * - Multi-frame chain spoofing using recursion
- * - Unwind data (.pdata) alignment for EDR evasion
- *
- * Modification History:
- * Author: Davide Galdiero (taekwondodev)
- * Multi-frame recursion: chain spoofing also for the base case of the
- * recursion, to ensure that the walker based on .pdata see as top stack frame
- * the one with the spoofed return address.
- *
- * Target function replaced with InjectExplorer: realistic process-injection
- * pattern (OpenProcess + VirtualAllocEx RWX + WriteProcessMemory +
- * CreateRemoteThread) on explorer.exe, to trigger EDR behavioral detection
- * and demonstrate call-stack attribution evasion across all 4 spoofing
- * scenarios.
+ * Modifications by Davide Galdiero (@taekwondodev):
+ * - Multi-frame recursion: SpoofCallStack applied also to the recursion base
+ *   case, so the .pdata walker sees the spoofed frame as top of stack (not
+ *   RecursiveSpoofHelper).
+ * - Target function replaced with InjectExplorer: realistic injection pattern
+ *   (OpenProcess + VirtualAllocEx RWX + WriteProcessMemory + CreateRemoteThread)
+ *   on explorer.exe to trigger EDR behavioral detection across all 4 scenarios.
+ * - CaptureStackBackTrace output printed from inside the target function for
+ *   direct comparison with WinDbg and System Informer captures.
  *
  * Compilation:
  * cl /O2 /MT stack_spoof_arm64.c stack_spoof_arm64.obj /link /MACHINE:ARM64
@@ -323,9 +308,7 @@ void PrintBanner(void) {
   printf("\n");
   printf("====================================================================="
          "===========\n");
-  printf("                      ARM64 Call Stack Spoofing Framework            "
-         "           \n");
-  printf("                          Alexander Hagenah (@xaitax)                "
+  printf("              ARM64 Call Stack Spoofing — Lab Analysis Tool          "
          "           \n");
   printf("====================================================================="
          "===========\n");
