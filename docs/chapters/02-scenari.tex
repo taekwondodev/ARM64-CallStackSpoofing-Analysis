@@ -1,14 +1,7 @@
-\chapter{Analisi Offensiva: 4 Scenari di Injection}
+\chapter{Analisi Offensiva: Tecniche di Call Stack Spoofing}
 \label{ch:scenari}
 
-% Struttura uniforme per ogni scenario:
-%   1. Meccanismo
-%   2. Codice rilevante (lstlisting C + ASM)
-%   3. Stack in memoria (dq sp L10 + TEB bounds)
-%   4. Evidenze raccolte (CBT console, WinDbg k, System Informer)
-%   5. Riepilogo (description list)
-
-Il capitolo analizza quattro scenari di call stack spoofing applicati a una
+Il capitolo analizza le tecniche di call stack spoofing applicate a una
 funzione di iniezione di codice in un processo di sistema. La funzione bersaglio
 è \texttt{InjectExplorer}: una catena API che esegue iniezione di memoria su
 \texttt{explorer.exe} tramite \texttt{OpenProcess}, \texttt{VirtualAllocEx},
@@ -19,9 +12,9 @@ un segnale comportamentale riconoscibile dagli EDR: non è il contenuto del
 payload a essere rilevato, ma il \emph{pattern} di chiamate API che lo porta
 all'esecuzione.
 
-I quattro scenari progressivi documentano come la medesima operazione offensiva
-appare agli strumenti di analisi dello stack in funzione della tecnica di
-spoofing impiegata, dal ground truth della chiamata diretta alla completa
+La baseline e le due tecniche di spoofing documentano come la medesima
+operazione offensiva appare agli strumenti di analisi dello stack in funzione
+della tecnica impiegata, dal ground truth della chiamata diretta alla completa
 evasione tramite stack pivot.
 
 % ── Il binario ────────────────────────────────────────────────────────────────
@@ -98,7 +91,7 @@ stub è descritto nella sezione dello scenario che lo impiega.
 
 \section*{La funzione target: \texttt{InjectExplorer}}
 
-\texttt{InjectExplorer} è la funzione bersaglio di tutti e quattro gli scenari.
+\texttt{InjectExplorer} è la funzione bersaglio di tutti e tre gli scenari.
 È dichiarata \texttt{\_\_declspec(noinline)}: MSVC emette un record
 \texttt{RUNTIME\_FUNCTION} proprio, rendendo il frame risolvibile da
 \texttt{RtlVirtualUnwind} in modo non ambiguo.
@@ -174,7 +167,7 @@ l'autenticità. L'output è visibile sulla console del binario.
 
 \subsection*{Sequenza di analisi WinDbg}
 
-La procedura è identica per tutti e quattro gli scenari; i comandi sono
+La procedura è identica per tutti e tre gli scenari; i comandi sono
 eseguiti nell'ordine seguente.
 
 \begin{enumerate}
@@ -207,9 +200,9 @@ eseguiti nell'ordine seguente.
 
 \end{enumerate}
 
-% ── Scenario 1: Baseline ──────────────────────────────────────────────────────
+% ── Baseline ──────────────────────────────────────────────────────────────────
 
-\section{Scenario 1: Baseline — Chiamata Diretta}
+\section{Baseline — Chiamata Diretta}
 \label{sec:sc1}
 
 Questo scenario stabilisce il \emph{ground truth}: \texttt{InjectExplorer}
@@ -229,7 +222,7 @@ thread.
 
 \lstinputlisting[style=cstyle, language=C,
   caption={Chiamata diretta a \texttt{InjectExplorer} da
-           \texttt{TestInjectionBaseline} (Scenario 1).},
+           \texttt{TestInjectionBaseline} (Baseline).},
   label={lst:sc1-call}]{listings/sc1-call-site.c}
 
 \subsection{Stack in Memoria}
@@ -238,7 +231,7 @@ SP al breakpoint: \texttt{0x00000056\,9c2ffe60}.
 
 \begin{lstlisting}[style=outstyle,
   caption={Output di \texttt{dq sp L10} al breakpoint su \texttt{InjectExplorer}
-           (Scenario 1 — Baseline)},
+           (Baseline)},
   label={lst:sc1-spdump}]
 00000056`9c2ffe60  00000000`00000000 00000006`3c4d7e85
 00000056`9c2ffe70  00000000`016e3600 00000000`00000000
@@ -258,7 +251,7 @@ SP al breakpoint: \texttt{0x00000056\,9c2ffe60}.
 
 \begin{lstlisting}[style=outstyle,
   caption={\texttt{CaptureStackBackTrace} dall'interno di \texttt{InjectExplorer}
-           (Scenario 1 — Baseline, dati da console)},
+           (Baseline, dati da console)},
   label={lst:sc1-cbt}]
 [00] InjectExplorer                           + 0x0060 <-- TARGET
 [01] mainCRTStartup                           + 0x0014
@@ -274,7 +267,7 @@ anch'essa inlinata. La CBT percorre solo frame con prologo canonico.
 
 \begin{lstlisting}[style=outstyle,
   caption={Output di \texttt{k} in WinDbg al breakpoint su
-           \texttt{InjectExplorer} (Scenario 1 — Baseline)},
+           \texttt{InjectExplorer} (Baseline)},
   label={lst:sc1-k}]
  # Child-SP          RetAddr               Call Site
 00 00000056`9c2ffe60 00007ff6`c040ccac     stack_spoof!InjectExplorer
@@ -299,7 +292,7 @@ normale della catena.
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario1/systeminformer-stack.png}
   \caption{System Informer — stack del thread principale con WinDbg in pausa
-           su \texttt{InjectExplorer} (Scenario 1). Le righe in giallo
+           su \texttt{InjectExplorer} (Baseline). Le righe in giallo
            indicano funzioni inlinate prive di frame proprio.}
   \label{fig:sc1-si}
 \end{figure}
@@ -315,9 +308,9 @@ normale della catena.
   \item[SP nei limiti TEB] Sì.
 \end{description}
 
-% ── Scenario 2: Single-Frame Spoofing ─────────────────────────────────────────
+% ── Single-Frame Spoofing ─────────────────────────────────────────────────────
 
-\section{Scenario 2: Single-Frame Spoofing}
+\section{Single-Frame Spoofing}
 \label{sec:sc2}
 
 Questo scenario introduce la prima tecnica di evasione: un singolo indirizzo di
@@ -351,7 +344,7 @@ Il meccanismo si articola in due fasi distinte:
 \subsection{Codice Rilevante}
 
 \lstinputlisting[style=cstyle, language=C,
-  caption={Chiamata a \texttt{SpoofCallStack} con gadget ntdll (Scenario 2).},
+  caption={Chiamata a \texttt{SpoofCallStack} con gadget ntdll (Single-Frame Spoofing).},
   label={lst:sc2-call}]{listings/sc2-spoof-call.c}
 
 \lstinputlisting[style=asmstyle, language=ARM64,
@@ -377,7 +370,7 @@ Offset da SP & Valore & Significato \\
 \bottomrule
 \end{tabular}
 \caption{Dump \texttt{dq sp L10} al breakpoint su \texttt{InjectExplorer}
-         (Scenario 2 — Single-Frame Spoofing). Gli offset \texttt{+0x20} e
+         (Single-Frame Spoofing). Gli offset \texttt{+0x20} e
          \texttt{+0x28} corrispondono alla struttura costruita dal passo~[3]
          del Listato~\ref{lst:sc2-asm}.}
 \label{tab:sc2-stack}
@@ -391,7 +384,7 @@ Offset da SP & Valore & Significato \\
 
 \begin{lstlisting}[style=outstyle,
   caption={\texttt{CaptureStackBackTrace} dall'interno di \texttt{InjectExplorer}
-           (Scenario 2 — Single-Frame Spoofing, dati da console)},
+           (Single-Frame Spoofing, dati da console)},
   label={lst:sc2-cbt}]
 [00] InjectExplorer                           + 0x0060 <-- TARGET
 [01] RtlWnfDllUnloadCallback                  + 0x1DFC <-- GADGET
@@ -413,7 +406,7 @@ visibile.
 
 \begin{lstlisting}[style=outstyle,
   caption={Output di \texttt{k} in WinDbg al breakpoint su
-           \texttt{InjectExplorer} (Scenario 2 — Single-Frame Spoofing)},
+           \texttt{InjectExplorer} (Single-Frame Spoofing)},
   label={lst:sc2-k}]
  # Child-SP          RetAddr               Call Site
 00 00000056`9c2ffdf0 00007ff6`c0401400     stack_spoof!InjectExplorer
@@ -431,7 +424,7 @@ stato, trova un \texttt{RetAddr} nullo e interrompe la traversata.
 \begin{figure}[H]
   \centering
   \includegraphics[width=0.72\linewidth]{../artifacts/scenario2/systeminformer-stack.png}
-  \caption{System Informer — Scenario 2. Solo 2 frame visibili, entrambi
+  \caption{System Informer — Single-Frame Spoofing. Solo 2 frame visibili, entrambi
            evidenziati in giallo: la catena è troncata dopo
            \texttt{SpoofCallStack}. Confrontare con la
            Figura~\ref{fig:sc1-si} (Baseline, 8 frame).}
@@ -451,160 +444,9 @@ stato, trova un \texttt{RetAddr} nullo e interrompe la traversata.
   \item[SP nei limiti TEB] Sì.
 \end{description}
 
-% ── Scenario 3: Multi-Frame Chain Spoofing ────────────────────────────────────
+% ── Stack Pivot ───────────────────────────────────────────────────────────────
 
-\section{Scenario 3: Multi-Frame Chain Spoofing}
-\label{sec:sc3}
-
-Questo scenario estende la tecnica del Single-Frame Spoofing costruendo una
-catena di frame genuini con indirizzi di ritorno falsificati su più livelli.
-\texttt{SpoofCallStack} è invocato a tutti e tre i livelli della ricorsione,
-incluso il caso base: ogni frame reale di \texttt{RecursiveSpoofHelper} ha il
-proprio LR sostituito da un gadget ntdll dedicato.
-
-\subsection{Meccanismo}
-
-\texttt{RecursiveSpoofHelper} si chiama ricorsivamente per 2 livelli prima del
-caso base (\texttt{maxDepth} = 2), producendo 3 invocazioni di
-\texttt{SpoofCallStack} e 3 gadget ntdll distinti. Poiché ogni frame di
-\texttt{RecursiveSpoofHelper} è un frame \texttt{x29} reale (con record
-\texttt{.pdata} proprio), la sequenza gadget/frame\allowbreak{}reale che ne risulta è
-\emph{strutturalmente valida} dal punto di vista del walker della catena FP.
-
-In questo run sono stati selezionati i seguenti gadget (ntdll base
-\texttt{0x00007FFE81EF0000}):
-
-\begin{itemize}
-  \item \texttt{Frame[0]}: \texttt{RtlWow64GetProcessMachines+0xA4}
-        (\texttt{0x00007FFE\,81EF55E4})
-  \item \texttt{Frame[1]}: \texttt{LdrControlFlowGuardEnforced+0x14C}
-        (\texttt{0x00007FFE\,81EF449C})
-  \item \texttt{Frame[2]} (caso base): \texttt{LdrControlFlowGuardEnforced+0x964}
-        (\texttt{0x00007FFE\,81EF4CB4})
-\end{itemize}
-
-\subsection{Codice Rilevante}
-
-\lstinputlisting[style=cstyle, language=C,
-  caption={\texttt{RECURSIVE\_SPOOF\_CONTEXT} e \texttt{RecursiveSpoofHelper}:
-           contesto di ricorsione e sostituzione LR per livello.},
-  label={lst:sc3-helper}]{listings/sc3-recursive-helper.c}
-
-Il primitivo \texttt{SpoofCallStack} impiegato ad ogni livello è identico
-a quello di Scenario~2 (Listato~\ref{lst:sc2-asm}): la struttura ASM,
-l'allocazione secondaria non documentata in \texttt{.pdata} e il gadget ntdll
-come LR falso sono invariati.
-
-\subsection{Stack in Memoria}
-
-SP al breakpoint: \texttt{0x00000056\,9c2ffaa0} — inferiore di circa
-\texttt{0x350} byte rispetto allo Scenario~2 (\texttt{0x9c2ffdf0}): la
-ricorsione a 3 livelli consuma stack aggiuntivo per i frame di
-\texttt{RecursiveSpoofHelper} e le allocazioni secondarie di ogni
-\texttt{SpoofCallStack}.
-
-\begin{table}[H]
-\centering
-\begin{tabular}{lll}
-\toprule
-Offset da SP & Valore & Significato \\
-\midrule
-\texttt{+0x28} & \texttt{0x00007ffe\,81ef6798} & Gadget ntdll caso base
-        (\texttt{LdrControlFlowGuardEnforced}) \\
-\texttt{+0x38} & \texttt{0x00007ff6\,c040bc50} & \texttt{RecursiveSpoofHelper}
-        in \texttt{stack\_spoof.exe} \\
-\texttt{+0x48} & \texttt{0x00007ffe\,81efac40} & Gadget ntdll livello 0
-        (\texttt{RtlWow64GetProcessMachines}) \\
-\bottomrule
-\end{tabular}
-\caption{Selezione da \texttt{dq sp L10} al breakpoint su
-         \texttt{InjectExplorer} (Scenario 3). Più indirizzi ntdll sono
-         visibili nel dump grezzo, intercalati agli indirizzi di
-         \texttt{RecursiveSpoofHelper}: struttura ricorsiva leggibile a livello
-         raw ma invisibile al walker \texttt{.pdata}.}
-\label{tab:sc3-stack}
-\end{table}
-
-{\sloppy SP è all'interno dei limiti TEB
-(\texttt{StackBase} \texttt{0x00000056\,9c300000},
-\texttt{StackLimit} \texttt{0x00000056\,9c2fb000}).\par}
-
-\subsection{Evidenze Raccolte}
-
-\begin{lstlisting}[style=outstyle,
-  caption={\texttt{CaptureStackBackTrace} dall'interno di \texttt{InjectExplorer}
-           (Scenario 3 — Multi-Frame, dati da console, ntdll base
-           \texttt{0x00007FFE81EF0000})},
-  label={lst:sc3-cbt}]
-[00] InjectExplorer                           + 0x0060 <-- TARGET
-[01] LdrControlFlowGuardEnforced              + 0x0964 <-- GADGET Frame[2] (caso base)
-[02] RecursiveSpoofHelper                     + 0x0030
-[03] LdrControlFlowGuardEnforced              + 0x014C <-- GADGET Frame[1]
-[04] RecursiveSpoofHelper                     + 0x0064
-[05] RtlWow64GetProcessMachines               + 0x00A4 <-- GADGET Frame[0]
-[06] RecursiveSpoofHelper                     + 0x0064
-[07] mainCRTStartup                           + 0x0014
-[08] BaseThreadInitThunk                      + 0x0040
-[09] RtlUserThreadStart                       + 0x0044
-\end{lstlisting}
-
-La CBT restituisce 10 frame con il pattern
-gadget/\texttt{RecursiveSpoofHelper} che si ripete per 3 livelli. L'offset
-\texttt{+0x0030} al frame \texttt{[02]} individua il caso base (chiamata a
-\texttt{SpoofCallStack} via \texttt{BL} al \texttt{+0x2C}); gli offset
-\texttt{+0x0064} ai frame \texttt{[04]} e \texttt{[06]} individuano il
-caso ricorsivo (chiamata ricorsiva anch'essa via \texttt{BL}). Il pattern è
-strutturalmente plausibile: alternanza regolare tra funzioni ntdll e funzioni
-del binario analizzato. La difficoltà di rilevamento è superiore allo
-Scenario~2, dove un singolo gadget ntdll isolato è più evidente.
-
-\begin{lstlisting}[style=outstyle,
-  caption={Output di \texttt{k} in WinDbg al breakpoint su
-           \texttt{InjectExplorer} (Scenario 3 — Multi-Frame Chain Spoofing)},
-  label={lst:sc3-k}]
- # Child-SP          RetAddr               Call Site
-00 00000056`9c2ffaa0 00007ff6`c0401400     stack_spoof!InjectExplorer
-01 00000056`9c2ffaa0 00000000`00000000     stack_spoof!SpoofCallStack+0x50
-\end{lstlisting}
-
-Il dato più rilevante è l'identità tra questo output e quello dello
-Scenario~2 (Listato~\ref{lst:sc2-k}). Il walker \texttt{.pdata} raggiunge
-\texttt{SpoofCallStack+0x50} e si ferma per lo stesso motivo: l'allocazione
-secondaria \texttt{sub sp, sp, \#0x30} non documentata. Il numero di livelli
-ricorsivi è completamente invisibile al walker: 1 frame falsificato o 3 sono
-indistinguibili dal solo output \texttt{k}. \texttt{RecursiveSpoofHelper}
-non compare mai.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.72\linewidth]{../artifacts/scenario3/systeminformer-stack.png}
-  \caption{System Informer — Scenario 3. Solo 2 frame visibili, entrambi in
-           giallo: comportamento identico allo Scenario~2.
-           La profondità della catena falsificata è invisibile al walker
-           ibrido FP/\texttt{.pdata}.}
-  \label{fig:sc3-si}
-\end{figure}
-
-\subsection{Riepilogo}
-
-\begin{description}
-  \item[CBT (catena \texttt{x29}/\texttt{x30})] 10 frame — pattern
-        gadget/frame-reale interleaved strutturalmente valido;
-        \texttt{RecursiveSpoofHelper} visibile ma con LR falsificati.
-        Attribuzione a \texttt{stack\_spoof.exe} parzialmente visibile
-        (frame \texttt{[02][04][06]}), ma più difficile da leggere rispetto
-        allo Scenario~2.
-  \item[WinDbg / SI (\texttt{.pdata})] 2 frame — \emph{identico} allo
-        Scenario~2. Il walker non distingue la profondità della catena
-        ricorsiva: 1 o 3 livelli di \texttt{SpoofCallStack} producono lo
-        stesso output.
-  \item[SP nei limiti TEB] Sì — invariante critico: la struttura è
-        indistinguibile da codice legittimo per qualsiasi controllo di bounds.
-\end{description}
-
-% ── Scenario 4: Stack Pivot ───────────────────────────────────────────────────
-
-\section{Scenario 4: Stack Pivot}
+\section{Stack Pivot}
 \label{sec:sc4}
 
 Gli scenari precedenti manipolavano il contenuto dello stack del thread
@@ -648,7 +490,7 @@ implementa il pivot in quattro fasi:
 \subsection{Codice Rilevante}
 
 \lstinputlisting[style=cstyle, language=C,
-  caption={\texttt{FAKE\_FRAME\_DATA} e setup dello Scenario 4: allocazione
+  caption={\texttt{FAKE\_FRAME\_DATA} e setup dello Stack Pivot: allocazione
            del fake stack e configurazione del pivot.},
   label={lst:sc4-setup}]{listings/sc4-fake-frame-setup.c}
 
@@ -677,7 +519,7 @@ Offset da SP & Valore & Significato \\
 \bottomrule
 \end{tabular}
 \caption{Dump \texttt{dq sp L10} al breakpoint su \texttt{InjectExplorer}
-         (Scenario 4 — Stack Pivot). SP è sul fake stack: solo 2 quadword
+         (Stack Pivot). SP è sul fake stack: solo 2 quadword
          significativi (FP e LR), poi memoria non allocata.}
 \label{tab:sc4-stack}
 \end{table}
@@ -690,7 +532,7 @@ Offset da SP & Valore & Significato \\
 
 \begin{lstlisting}[style=outstyle,
   caption={\texttt{CaptureStackBackTrace} dall'interno di \texttt{InjectExplorer}
-           (Scenario 4 — Stack Pivot, dati da console)},
+           (Stack Pivot, dati da console)},
   label={lst:sc4-cbt}]
   [STACK TRACE] From inside InjectExplorer (user-mode view):
       (no frames -- stack pivot active)
@@ -704,7 +546,7 @@ abortisce prima della prima lettura.
 
 \begin{lstlisting}[style=outstyle,
   caption={Output di \texttt{k} in WinDbg al breakpoint su
-           \texttt{InjectExplorer} (Scenario 4 — Stack Pivot)},
+           \texttt{InjectExplorer} (Stack Pivot)},
   label={lst:sc4-k}]
 WARNING: Stack pointer is outside the normal stack bounds.
          Stack unwinding can be inaccurate.
@@ -722,8 +564,8 @@ di rilevamento.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.72\linewidth]{../artifacts/scenario4/systeminformer-stack.png}
-  \caption{System Informer — Scenario 4. 2 frame in giallo:
+  \includegraphics[width=0.72\linewidth]{../artifacts/scenario3/systeminformer-stack.png}
+  \caption{System Informer — Stack Pivot. 2 frame in giallo:
            \texttt{InjectExplorer} e \texttt{ExecuteWithFakeFrame+0x54}.
            La catena si tronca identicamente a WinDbg.}
   \label{fig:sc4-si}
@@ -748,58 +590,49 @@ di rilevamento.
 \section{Riepilogo Comparativo}
 \label{sec:riepilogo-scenari}
 
-La Tabella~\ref{tab:riepilogo} sintetizza le evidenze raccolte per i 4
-scenari nei confronti dei 3 strumenti di analisi.
+La Tabella~\ref{tab:riepilogo} confronta, per i 3 scenari, l'output dei due
+meccanismi di stack walking user-mode: il walker basato sulla catena
+\texttt{x29}/\texttt{x30} (\texttt{CaptureStackBackTrace}) e il walker basato
+su \texttt{.pdata} (WinDbg \texttt{k}).
 
 \begin{table}[H]
 \centering
-\begin{tabular}{lp{3.5cm}p{3.5cm}p{3.5cm}}
+\small
+\begin{tabular}{p{2.8cm}p{5.2cm}p{5.2cm}}
 \toprule
-Scenario & CBT & WinDbg \texttt{k} & System Informer \\
+Scenario
+  & Walker \texttt{x29}/\texttt{x30} (\texttt{CaptureStackBackTrace})
+  & Walker \texttt{.pdata} (WinDbg \texttt{k}) \\
 \midrule
-1 — Baseline &
-  4 frame (catena integra, \texttt{TestInjectionBaseline} inlinata) &
-  9 frame completi; inline functions visibili come tali &
-  8 frame; funzioni inlinate in giallo \\
-\midrule
-2 — Single-Frame &
-  6 frame; gadget ntdll a \texttt{[01]}, \texttt{main} visibile a \texttt{[02]} &
-  2 frame + \texttt{RetAddr} null; \texttt{SpoofCallStack} visibile &
-  2 frame gialli \\
-\midrule
-3 — Multi-Frame &
-  10 frame; pattern gadget/\texttt{RSH} $\times$ 3; attribuzione parziale &
-  2 frame + \texttt{RetAddr} null; \emph{identico} allo Scenario~2 &
-  2 frame gialli \\
-\midrule
-4 — Stack Pivot &
-  0 frame (SP fuori TEB: walker abortisce) &
-  \texttt{WARNING} + 2 frame + \texttt{RetAddr} null &
-  2 frame gialli \\
+Baseline
+  & 4 frame; catena integra, \texttt{TestInjectionBaseline} inlinata
+  & 9 frame completi; funzioni inlinate espanse \\
+\addlinespace
+Single-Frame
+  & 6 frame; gadget ntdll a \texttt{[01]}, \texttt{main} visibile a \texttt{[02]}
+  & 2 frame + \texttt{RetAddr} null; walker bloccato dal gap \texttt{.pdata} \\
+\addlinespace
+Stack Pivot
+  & 0 frame; SP fuori TEB, walker abortisce
+  & \texttt{WARNING} SP + 2 frame + \texttt{RetAddr} null \\
 \bottomrule
 \end{tabular}
-\caption{Confronto degli output dei 3 strumenti di analisi per i 4 scenari.
-         Il finding chiave dello Scenario~3 è l'identità con lo Scenario~2
-         nell'output WinDbg: il walker \texttt{.pdata} non distingue 1 da 3
-         livelli di \texttt{SpoofCallStack}. Il finding chiave dello
-         Scenario~4 è il \texttt{WARNING} SP: firma residua rilevabile
-         anche senza interpretare la call chain.}
+\caption{Confronto tra walker \texttt{x29}/\texttt{x30} e walker \texttt{.pdata}
+         per le tre tecniche. Stack Pivot mostra il limite opposto del walker
+         \texttt{x29}/\texttt{x30} rispetto a Single-Frame Spoofing: SP fuori TEB causa
+         l'abort immediato, ma il \texttt{WARNING} WinDbg costituisce una firma
+         residua indipendente dalla call chain.}
 \label{tab:riepilogo}
 \end{table}
 
-Il dato più significativo dell'analisi comparativa è la \emph{divergenza
-strutturale} tra CBT e WinDbg negli Scenari~2 e~3. CBT percorre la catena
-\texttt{x29}/\texttt{x30} e riporta fedelmente tutto ciò che trova,
-gadget inclusi, ma non può nascondere i frame reali di
-\texttt{stack\_spoof.exe} (in particolare \texttt{main}). WinDbg, più
-sofisticato nel meccanismo di unwinding, viene ingannato dall'allocazione
-secondaria non documentata in \texttt{.pdata}: si ferma a 2 frame in
-entrambi gli scenari.
+La divergenza più rilevante emerge da Single-Frame Spoofing. Il walker
+\texttt{x29}/\texttt{x30} percorre fedelmente ogni frame costruito in memoria, gadget inclusi, e non può nascondere i frame reali del binario; il prezzo
+è che non rileva la troncatura prodotta dal gap \texttt{.pdata}. Il walker
+\texttt{.pdata} si ferma esattamente dove lo spoofing ha interrotto la catena
+di record di unwinding, lasciando un \texttt{RetAddr} nullo in posizione non
+terminale: firma deterministica rilevabile da qualsiasi walker che validi gli
+indirizzi di ritorno prima dei frame CRT attesi.
 
-Lo Scenario~3 è il caso più difficile da rilevare in user-mode: SP è nei
-limiti TEB, la catena CBT è strutturalmente plausibile (alternanza
-regolare funzioni-sistema/funzioni-binario), e il walker \texttt{.pdata}
-non distingue la profondità della catena falsificata. Lo Scenario~4 offre
-la massima evasione rispetto a CBT (0 frame), ma la firma SP è rilevabile
-da qualsiasi strumento che legga i campi TEB, indipendentemente dalla
-capacità di interpretare la call chain.
+Stack Pivot offre la massima evasione rispetto al walker
+\texttt{x29}/\texttt{x30} (0 frame), ma la firma SP fuori TEB è rilevabile
+indipendentemente dalla capacità di interpretare la call chain.

@@ -3,10 +3,11 @@
 # ARM64 Call Stack Spoofing — Analysis
 
 [![PDF Report](https://img.shields.io/badge/PDF-Report-red)](https://github.com/taekwondodev/ARM64-CallStackSpoofing/raw/main/docs/main.pdf)
+[![PDF Slides](https://img.shields.io/badge/PDF-Slides-blue)](https://github.com/taekwondodev/ARM64-CallStackSpoofing/raw/main/docs/slides.pdf)
 
 </div>
 
-Analysis of 3 call stack spoofing techniques on Windows 11 ARM64.
+Analysis of 2 call stack spoofing techniques on Windows 11 ARM64.
 
 ## Original Framework
 
@@ -27,9 +28,6 @@ This repository is NOT an official GitHub fork.
 
 ## What This Repository Adds
 
-- **Multi-frame recursion fix**: `SpoofCallStack` applied also to the base case of
-  `RecursiveSpoofHelper`, so the `.pdata` walker sees the spoofed frame as the top
-  of the chain, not the helper function itself.
 - **Realistic target function** (`InjectExplorer`): replaces the original stub with
   a full injection pattern (`OpenProcess` + `VirtualAllocEx RWX` + `WriteProcessMemory`
   + `CreateRemoteThread`) on `explorer.exe` — benign NOP+RET payload, but the API
@@ -37,23 +35,32 @@ This repository is NOT an official GitHub fork.
 - **In-target stack capture**: `CaptureStackBackTrace` called from inside `InjectExplorer`
   for direct comparison with WinDbg `k` and System Informer captures across all scenarios.
 - **[Lab report](https://github.com/taekwondodev/ARM64-CallStackSpoofing/raw/main/docs/main.pdf)**
-  (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis of all 4 scenarios,
-  defensive detection analysis (user-mode walker limits and MDE kernel-mode coverage),
+  (LaTeX, 4 chapters): ARM64 fundamentals, offensive analysis of all 3 scenarios,
+  defensive detection analysis (user-mode walker limits and EDR kernel-mode coverage),
   attacker/defender tradeoffs.
 - **Real execution artifacts** per scenario: WinDbg stack traces, CaptureStackBackTrace
   output, System Informer captures, detection coverage matrix per-tool/per-scenario.
 
-## Scenarios
+## What Was Removed vs the Original
 
-**Baseline (scenario 1)** is a direct call with no spoofing — it establishes the ground
-truth of what a legitimate stack looks like across the 3 tools (4 / 9 / 8 frames depending
-on the tool). It is not a spoofing technique.
+- **Multi-frame recursion** (`RecursiveSpoofHelper`): removed. Analysis shows that
+  regardless of recursion depth N, the first semantic call site failure always occurs
+  at depth 2 — RSH's base case must carry a gadget as its return address, so any
+  checker with budget ≥ 2 catches it at the same point as single-frame spoofing.
+  Adding more recursion levels shifts the failure pair upward by a constant but does
+  not increase the depth at which the first anomaly appears. The technique offers no
+  advantage over Single-Frame Spoofing against any checker with budget ≥ 2.
 
-| # | Technique | Key Finding |
-|---|-----------|-------------|
-| 2 | Single-frame spoofing | WinDbg: 2 frames + null RetAddr. CaptureStackBackTrace: 6 frames (gadget visible) |
-| 3 | Multi-frame recursion | 10 structurally valid frames — no user-mode signature; requires kernel-mode analysis |
-| 4 | Stack pivot | SP outside TEB bounds — deterministic kernel signature; CaptureStackBackTrace: 0 frames |
+## Techniques
+
+**Baseline** is a direct call with no spoofing — it establishes the ground truth of what
+a legitimate stack looks like across the 3 tools (4 / 9 / 8 frames depending on the tool).
+It is not a spoofing technique.
+
+| Technique | Key Finding |
+|-----------|-------------|
+| Single-Frame Spoofing | WinDbg: 2 frames + null RetAddr. CaptureStackBackTrace: 6 frames (gadget at [01], `main` visible at [02]) |
+| Stack Pivot | SP outside TEB bounds — deterministic signature; CaptureStackBackTrace: 0 frames |
 
 ## Repository Structure
 

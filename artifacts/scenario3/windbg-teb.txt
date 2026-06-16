@@ -12,6 +12,9 @@ stack_spoof!_NT_TIB
 Notes:
 - StackBase  (x18+0x08) = 0x00000056`9c300000
 - StackLimit (x18+0x10) = 0x00000056`9c2fb000
-- SP (Sc3) = 0x9c2ffaa0 -- inside range, no SP anomaly
-- SP in TEB bounds confirms: Sc3 is structurally indistinguishable from
-  legitimate code to any user-mode SP-bounds checker.
+- SP (Sc4) = 0x000001d9`b4f5ffe0 -- OUTSIDE range [0x9c2fb000, 0x9c300000]
+- Signature: SP not in [StackLimit, StackBase]. Detectable by any user-mode
+  tool that reads x18+0x08 and x18+0x10 and compares against SP.
+- TEB itself unchanged: attacker cannot modify StackBase/StackLimit from
+  user-mode without introducing a second signature (VAD type MEM_PRIVATE
+  instead of MEM_STACK, detectable via VirtualQuery).

