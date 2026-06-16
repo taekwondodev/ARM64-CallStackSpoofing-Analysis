@@ -1,24 +1,57 @@
 \chapter{Introduzione}
 \label{ch:introduzione}
 
-I tool di sicurezza che operano in user-mode identificano operazioni sospette
-ispezionando la \emph{call stack} al momento in cui avvengono.
-Questa ispezione risale la catena di frame pointer e return address per
-ricostruire la sequenza di chiamate che ha portato all'operazione. Se la call
-chain risultante corrisponde a funzioni di sistema legittime, l'evento è
-classificato come benigno; in caso contrario, viene segnalato come anomalo.
-
+La \emph{call stack} è la struttura dati che il sistema operativo mantiene per
+ogni thread in esecuzione: registra la sequenza di funzioni attive, dalla
+funzione corrente fino al punto di ingresso del thread. Su questa struttura si
+basa una classe importante di tecniche difensive: gli strumenti di sicurezza
+intercettano le chiamate alle API di sistema sensibili e risalgono la call stack
+per ricostruire il contesto di invocazione. Se la sequenza di chiamate ha
+origine da codice firmato e legittimo, l'operazione è classificata come benigna;
+se risale a un modulo sconosciuto o non firmato, viene segnalata come anomala.
 Il \emph{call stack spoofing} è una tecnica di \emph{defense evasion} che
 sfrutta questa dipendenza: falsificando i frame pointer e i return address
-visibili agli stack walker user-mode, è possibile presentare una call chain
-apparentemente legittima anche durante operazioni sospette. L'efficacia della
-tecnica dipende dall'architettura del sistema e dai meccanismi con cui il
-sistema operativo gestisce la catena di chiamate.
+visibili agli stack walker, è possibile presentare una call chain apparentemente
+legittima anche durante operazioni intrinsecamente sospette.
+
+Gli strumenti che si affidano a questa ispezione appartengono alla categoria
+degli \emph{Endpoint Detection and Response} (EDR). Un EDR è un agente software
+distribuito su ogni endpoint aziendale con l'obiettivo di rilevare comportamenti
+malevoli a runtime, raccogliere telemetria e, nelle configurazioni più
+aggressive, bloccare le operazioni classificate come pericolose. Intercettano le chiamate alle API di sistema e ispezionano la call
+stack per attribuire ogni operazione al codice che l'ha originata.
+
+Il collegamento tra call stack spoofing e EDR è diretto: poiché l'EDR usa la
+call stack come segnale di attribuzione, un attaccante che controlli ciò che la
+call stack mostra può ridurre la probabilità che un'operazione sospetta venga
+correttamente classificata. Invece di apparire come originata da codice malevolo,
+l'azione risulta attribuita a una libreria di sistema legittima e viene trattata come benigna dall'EDR.
+
+% ── Threat Model ──────────────────────────────────────────────────────────────
+
+\section{Threat Model}
+\label{sec:threat-model}
 
 Un caso emblematico è il \emph{worm}: una volta ottenuta l'esecuzione su un
-sistema, deve allocare memoria eseguibile, creare processi per replicarsi e
-comunicare con l'esterno. Si tratta di operazioni intrinsecamente sospette che i tool di
-sicurezza in user-mode ispezionano sistematicamente. Il call stack spoofing
-consente al worm di mascherare queste operazioni presentando una call chain
-apparentemente legittima, riducendo la probabilità di rilevamento senza
-modificare il comportamento funzionale.
+sistema enterprise, deve allocare memoria eseguibile in altri processi, accedere
+allo spazio di indirizzamento di processi privilegiati e replicarsi lateralmente.
+Si tratta di operazioni che l'EDR monitora sistematicamente e che, se attribuite
+al binario del worm, generano un alert e potenzialmente un blocco. Il call stack
+spoofing consente al worm di eseguire queste stesse operazioni facendo apparire
+ogni chiamata sensibile come originata da codice di sistema, riducendo la
+superficie di rilevamento senza modificare il comportamento funzionale.
+
+Il threat model di questo elaborato è il seguente: l'attore è un operatore di ransomware. Ha già ottenuto l'esecuzione iniziale su un
+endpoint enterprise tramite tecniche esterne allo scope di questo elaborato
+(phishing, sfruttamento di vulnerabilità, compromissione della supply chain).
+L'obiettivo successivo è eseguire operazioni ad alto rischio: movimento
+laterale, escalation di privilegi, esfiltrazione di dati, deployment del payload
+finale, mentre l'EDR è attivo. Poiché l'ambiente enterprise garantisce la
+presenza di un EDR per requisito normativo, la capacità di ridurne la visibilità
+è un vantaggio operativo concreto per l'attaccante. Il contesto consumer privo di EDR per default non è rilevante per queste tecniche: senza uno
+strumento che ispeziona la call stack, non c'è nulla da ingannare.
+
+Questo elaborato documenta empiricamente come le tecniche di call stack spoofing
+si adattino all'architettura ARM64 su Windows~11 e misura il loro effetto sulla
+visibilità degli strumenti di analisi stack, con CrowdStrike Falcon
+come strumento difensivo di riferimento nel laboratorio.

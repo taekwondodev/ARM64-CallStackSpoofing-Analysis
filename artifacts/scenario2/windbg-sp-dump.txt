@@ -1,18 +1,17 @@
-SP = 0000006a`8ecffa50  (at entry to SecretFunction, before prologue)
-First instruction: stp x19,x20,[sp,#-0x60]!  (not yet executed at breakpoint)
+0:000> dq sp L10
+00000056`9c2ffdf0  00007ff6`c04cf118 ffffe811`0a63bd88
+00000056`9c2ffe00  00007ff6`c04d11e8 00007ffe`81ef72b4
+00000056`9c2ffe10  00000056`9c2ffe20 00007ffe`81ef72b4
+00000056`9c2ffe20  00000056`9c2ffef0 00007ff6`c040ce04
+00000056`9c2ffe30  00007ff6`c04d11e8 00007ffe`81ef72b4
+00000056`9c2ffe40  00007ff6`c04d01a0 00007ff6`c04bc000
+00000056`9c2ffe50  00007ff6`c04bc000 00007ff6`c04bc000
+00000056`9c2ffe60  00007ff6`c040ce04 00000006`5d0ec5a9
 
-dq sp L10:
-0000006a`8ecffa50  00007ff7`af11f118 ffffa5bb`b09f3b64
-0000006a`8ecffa60  00007ff7`af1211f8 00007fff`2e555434
-0000006a`8ecffa70  0000006a`8ecffa80 00007fff`2e555434
-0000006a`8ecffa80  0000006a`8ecffb70 00007ff7`af05cf50
-0000006a`8ecffa90  00007ff7`af1211f8 00007fff`2e555434
-0000006a`8ecffaa0  00007ff7`af1201b0 00007ff7`af10c000
-0000006a`8ecffab0  00007ff7`af10c000 00007ff7`af10c000
-0000006a`8ecffac0  00007ff7`af05cf50 00000000`8054369e
-
-Annotations:
-  sp+0x20 (0x8ecffa70): 0x0000006a`8ecffa80 = fake frame FP (-> real SpoofCallStack frame)
-  sp+0x28 (0x8ecffa78): 0x00007fff`2e555434 = SPOOFED LR (ntdll gadget)
-  sp+0x30 (0x8ecffa80): 0x0000006a`8ecffb70 = real FP (-> caller of SpoofCallStack = main)
-  sp+0x38 (0x8ecffa88): 0x00007ff7`af05cf50 = real LR (return to main)
+Notes:
+- SP = 0x00000056`9c2ffdf0
+- TEB StackBase = 0x00000056`9c300000, StackLimit = 0x00000056`9c2fb000
+- SP inside TEB bounds: VALID (no SP anomaly signature)
+- SP+0x18 = 0x00007ffe`81ef72b4 -- ntdll gadget address stored in frame
+- SP+0x20 = 0x00000056`9c2ffe20 -- saved x29 (frame pointer chain link)
+- SP+0x28 = 0x00007ff6`c040ce04 -- real return address of TestInjectionSingleFrame

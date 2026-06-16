@@ -3,154 +3,59 @@
 
 I capitoli precedenti hanno documentato le tecniche e misurato i loro effetti
 sugli strumenti di analisi. Questo capitolo sintetizza: dal punto di vista
-dell'attaccante, quale scenario è ottimale e perché; dal punto di vista del
-difensore, quale strategia è ottimale e perché.
+dell'attaccante, quale scenario è ottimale in funzione del modello difensivo
+del bersaglio; dal punto di vista del difensore, quale strategia copre l'intero
+spazio delle tecniche analizzate.
 
-% ── 5.1 Tradeoff dell'Attaccante ─────────────────────────────────────────────
+% ── 5.1 Scelta Razionale dell'Attaccante ──────────────────────────────────────
 
-\section{Tradeoff dell'Attaccante: Complessità vs Invisibilità}
+\section{Scelta Razionale dell'Attaccante}
 
-La Tabella~\ref{tab:attacker-tradeoff} sintetizza il rapporto costo/beneficio
-di ogni scenario dal punto di vista offensivo.
+L'efficacia delle tecniche di call stack spoofing dipende dal meccanismo con
+cui l'EDR del bersaglio percorre la catena di chiamate. Sia Single Frame
+Spoofing che Stack Pivoting sono efficaci quando il walker si basa sulle entry
+\texttt{.pdata}: il primo inserisce un frame falso con un gadget \texttt{ntdll}
+dotato di entry \texttt{.pdata} valida; il secondo sposta SP su un fake stack
+allocato separatamente, interrompendo la catena prima che raggiunga il codice
+offensivo.
 
-\begin{table}[H]
-\centering
-\small
-\begin{tabular}{lp{1.8cm}p{1.8cm}p{2.4cm}p{2.0cm}p{2.4cm}}
-\toprule
- & Sc~1 & Sc~2 & Sc~3 & Sc~4 & Sc~5 \\
-\midrule
-Complessità
-  & Nessuna
-  & Bassa (1 gadget)
-  & Media (3 gadget, ricorsione)
-  & Alta (pivot SP)
-  & Alta (pivot SP +\newline\texttt{CreateProcessW}) \\
-\addlinespace
-Walker user-mode
-  & Catena integra
-  & 2 frame + null RetAddr
-  & 10 frame strutturali
-  & 0 frame (CBT)
-  & 0 frame \\
-\addlinespace
-Sysmon EID~1
-  & N/A & N/A & N/A & N/A
-  & \texttt{ParentImage} visibile \\
-\addlinespace
-SP anomalia
-  & No & No & No & \textbf{Sì} & \textbf{Sì} \\
-\bottomrule
-\end{tabular}
-\caption{Tradeoff attaccante: complessità vs firma residua per scenario.
-         ``N/A'' = Sysmon non registra EID~1 per scenari senza creazione di processo.}
-\label{tab:attacker-tradeoff}
-\end{table}
+\paragraph{Walker basato sulla catena x29/x30.}
+Se l'EDR percorre la catena dei frame pointer invece di affidarsi a
+\texttt{.pdata}, le due tecniche si differenziano. Con Single Frame Spoofing
+il registro \texttt{x29} di \texttt{InjectExplorer} punta ancora al frame reale
+del chiamante: la risalita arriva a \texttt{stack\_spoof.exe} come top frame,
+rendendo l'attribuzione al codice offensivo possibile. Con Stack Pivoting SP
+viene sostituito con un fake stack privo di catena \texttt{x29/x30} verso il
+codice offensivo: il walker non trova continuità e l'attribuzione non risale
+all'eseguibile malevolo.
 
-\paragraph{Punto ottimale: Scenario~3.}
-Scenario~3 offre il miglior compromesso per chi operi contro un difensore con
-soli strumenti user-mode: nessuna firma strutturale rilevabile, SP in bounds,
-gadget con \texttt{.pdata} valida. Il costo aggiuntivo rispetto a Scenario~2
-è la gestione della ricorsione e la selezione di tre gadget compatibili —
-complessità gestibile.
 
-\paragraph{Massima evasione (con costo): Scenari~4 e~5.}
-Questi scenari eliminano completamente il backtrace visibile a
-\texttt{CaptureStackBackTrace}, ma introducono la firma SP fuori TEB —
-ineliminabile in user-mode. Sono preferibili solo quando la firma SP è
-accettabile nel contesto operativo; per l'invisibilità totale, Scenario~3
-rimane superiore.
+% ── 5.2 Tradeoff del Difensore ────────────────────────────────────────────────
 
-% ── 5.2 Segnali Residui Ineliminabili ────────────────────────────────────────
+\section{Tradeoff del Difensore: Rilevamento vs Blocco}
 
-\section{Segnali Residui Ineliminabili in User-Mode}
-
-Ogni tecnica analizzata lascia almeno un segnale che non può essere eliminato
-senza introdurre una firma alternativa di pari o maggiore visibilità.
-
-\paragraph{SP fuori dai bounds TEB (Scenari~4 e~5).}\leavevmode\newline
-Sovrascrivere \texttt{TEB.StackBase} e \texttt{TEB.StackLimit} per coprire il
-fake stack elimina la firma SP fuori bounds, ma introduce una seconda firma: la
-regione coperta dal TEB modificato ha tipo \texttt{MEM\_PRIVATE} nel VAD
-(allocata con \texttt{VirtualAlloc}), non \texttt{MEM\_STACK} come uno stack di
-sistema. Un difensore che interroghi il VAD tramite \texttt{VirtualQuery} vede
-la discrepanza. Le due firme non sono eliminabili contemporaneamente senza
-modificare le VAD entries — strutture kernel non accessibili da user-mode.
-
-\paragraph{RetAddr nullo in posizione non terminale (Scenario~2).}
-La troncatura della catena \texttt{.pdata} produce un RetAddr nullo prima dei
-frame CRT canonici (\texttt{BaseThreadInitThunk},\allowbreak{} \texttt{RtlUserThreadStart}).
-Il segnale è sottile — non rilevabile da un singolo walker — ma identificabile
-da una regola sulla profondità minima attesa della catena.
-
-\paragraph{ParentImage anomalo (Scenario~5).}
-Sysmon EID~1 registra sempre il processo padre indipendentemente dal meccanismo
-di invocazione. Il segnale è contestuale (richiede una allowlist dei processi
-autorizzati), ma non è eliminabile dall'attaccante.
-
-% ── 5.3 Tradeoff del Difensore ────────────────────────────────────────────────
-
-\section{Tradeoff del Difensore: Copertura vs Costo}
-
-\begin{table}[H]
-\centering
-\small
-\begin{tabular}{lp{3cm}p{2cm}p{4cm}}
-\toprule
-Strumento & Copertura & Costo & Limite principale \\
-\midrule
-Sysmon EID~1
-  & Sc5 (\texttt{ParentImage})
-  & Basso
-  & Contestuale: richiede allowlist \\
-Walker user-mode (SP check)
-  & Sc4, Sc5 (rilevazione)
-  & Basso
-  & Rilevazione post-hoc; nessun blocco affidabile (polling asincrono) \\
-Walker user-mode (depth check)
-  & Sc2 (null RetAddr)
-  & Medio
-  & FPR elevato senza baseline per processo \\
-Kernel-mode (MDE/EDR)
-  & Sc1--5 (tutti)
-  & Alto
-  & Richiede licenza enterprise; overhead syscall \\
-\bottomrule
-\end{tabular}
-\caption{Tradeoff difensore: copertura degli scenari vs costo operativo.}
-\label{tab:defender-tradeoff}
-\end{table}
-
-\subsection{Soluzione: EDR o Accettare i Gap}
-
-Nessuna combinazione di strumenti user-mode copre tutti e cinque gli scenari.
-Sysmon EID~1, SP bounds check e profondità minima del backtrace coprono
-Scenari~2, 4 e~5, ma lasciano Scenario~3 irrisolto: catena strutturalmente
-valida, SP in bounds, nessuna firma deterministica rilevabile dall'esterno.
-
-Il gap non è colmabile in user-mode. La detection affidabile di Scenario~3
-richiede analisi comportamentale in kernel-mode — disponibile in soluzioni EDR
-come Microsoft Defender for Endpoint.
-
-Il tradeoff per il difensore è quindi binario:
+Tutti e tre gli scenari presentano firme rilevabili: catena integra per
+Baseline, catena \texttt{x29} che rivela il modulo offensivo per Single-Frame Spoofing,
+SP fuori TEB per Stack Pivot. Il limite degli strumenti user-mode non è la
+copertura ma la sincronia: al momento del rilevamento l'operazione è già
+completata.
 
 \begin{itemize}
-  \item \textbf{Adottare un EDR (es.\ MDE)} — copertura completa su tutti e
-        cinque gli scenari, incluso Scenario~3; costo in licenze e overhead
-        syscall.
-  \item \textbf{Non adottare un EDR} — copertura parziale con strumenti
-        user-mode; Scenario~3 rimane un gap strutturale da accettare
-        consapevolmente come rischio residuo.
+  \item \textbf{Strumenti user-mode} — copertura completa; costo basso;
+        solo rilevamento post-hoc. Il rischio residuo viene accettato
+        consapevolmente.
+  \item \textbf{EDR con driver kernel-mode} — blocco sincrono nel contesto
+        del thread offensivo; punto di partenza autoritativo
+        (\texttt{KTRAP\_FRAME}) non modificabile da user-mode; costo in
+        licenze e overhead syscall.
 \end{itemize}
 
-Il patchwork user-mode (Sysmon + SP check + depth check) non è una
-alternativa strategica all'EDR: è la soluzione per contesti in cui l'EDR non
-è deployabile, con la consapevolezza esplicita del gap che introduce.
+Non c'è via di mezzo: o si accetta il rischio residuo o si paga il costo
+del blocco sincrono.
 
 \bigskip
 \noindent
-Il risultato fondamentale è un'asimmetria strutturale: l'attaccante sceglie
-il punto ottimale su una curva complessità/invisibilità; il difensore deve
-coprire l'intera curva. Questa asimmetria si riduce solo con strumenti a
-privilegio irraggiungibile dal codice offensivo: kernel-mode callback disponibili
-esclusivamente in soluzioni EDR.
+L'asimmetria è strutturale: l'attaccante sceglie la tecnica in base
+all'intelligence sul difensore; il difensore deve coprire l'intera superficie
+senza sapere quale tecnica sarà impiegata. Si riduce solo alzando il livello
+di privilegio del controllo oltre quello raggiungibile dal codice offensivo.

@@ -1,4 +1,16 @@
+WARNING: Stack pointer is outside the normal stack bounds. Stack unwinding can be inaccurate.
  # Child-SP          RetAddr               Call Site
-00 0000000b`1599f620 00007ff7`abf0b784     stack_spoof!SecretFunction [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 172]
-01 0000000b`1599f620 00007ff7`abf01430     stack_spoof!RecursiveSpoofHelper+0x24 [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 467]
-02 0000000b`1599f640 00000000`00000000     stack_spoof!SpoofCallStack+0x50
+00 000001d9`b4f5ffe0 00007ff6`c0401564     stack_spoof!InjectExplorer [C:\Users\admin\Desktop\lab\ARM64-CallStackSpoofing\stack_spoof_arm64.c @ 190]
+01 000001d9`b4f5ffe0 00000000`00000000     stack_spoof!ExecuteWithFakeFrame+0x54
+
+Notes:
+- ntdll.dll base (this run): 0x00007ffe`81ef0000
+- stack_spoof.exe base (this run): 0x00007ff6`c03f0000
+- WinDbg emits WARNING before unwinding: SP 0x000001d9`b4f5ffe0 is outside
+  TEB bounds [0x9c2fb000, 0x9c300000].
+- 2 frames + null RetAddr. ExecuteWithFakeFrame+0x54 visible (ASM function has
+  .pdata; walker resolves it, then finds null RetAddr).
+- SP column for both frames shows fake stack address (0x000001d9`b4f5ffe0),
+  confirming the pivot. Past top of allocation: unreadable (see sp-dump).
+- Gadget (0x00007FFE81EF35C0) is stored as fake LR in the pivoted frame
+  (SP+0x08 in sp-dump) but walker stops at null RetAddr of ExecuteWithFakeFrame.

