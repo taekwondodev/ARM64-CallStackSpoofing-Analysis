@@ -1,3 +1,25 @@
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+Questo elaborato analizza empiricamente le tecniche di \emph{call stack spoofing}
+sull'architettura ARM64 sotto Windows~11, con l'obiettivo di misurarne l'efficacia
+contro gli stack walker degli strumenti di sicurezza endpoint. Vengono implementati
+e analizzati tre scenari progressivi --- chiamata diretta (baseline), single-frame
+spoofing e stack pivot --- applicati a una funzione target che esegue iniezione di
+codice in un processo remoto tramite le API \texttt{OpenProcess},
+\texttt{VirtualAllocEx} e \texttt{CreateRemoteThread}. Per ciascuno scenario
+vengono raccolti artifact reali da una macchina virtuale Windows~11 ARM64 e
+analizzati con WinDbg, System Informer e \texttt{CaptureStackBackTrace}.
+L'analisi mostra che lo stack pivot elimina completamente la visibilità degli
+stack walker user-mode ma introduce una firma deterministica nel valore di SP
+rispetto ai limiti TEB, mentre il single-frame spoofing ottiene evasione parziale
+a costo implementativo inferiore. L'analisi difensiva dimostra che tutti e tre
+gli scenari presentano almeno una firma rilevabile in user-mode; gli strumenti
+EDR kernel-mode aggiungono un punto di cattura sincrono inaccessibile
+all'attaccante.
+
+% ── Introduzione ──────────────────────────────────────────────────────────────
+
 \chapter{Introduzione}
 \label{ch:introduzione}
 
@@ -18,19 +40,21 @@ Gli strumenti che si affidano a questa ispezione appartengono alla categoria
 degli \emph{Endpoint Detection and Response} (EDR). Un EDR è un agente software
 distribuito su ogni endpoint aziendale con l'obiettivo di rilevare comportamenti
 malevoli a runtime, raccogliere telemetria e, nelle configurazioni più
-aggressive, bloccare le operazioni classificate come pericolose. Intercettano le chiamate alle API di sistema e ispezionano la call
-stack per attribuire ogni operazione al codice che l'ha originata.
+aggressive, bloccare le operazioni classificate come pericolose. Intercettano le
+chiamate alle API di sistema e ispezionano la call stack per attribuire ogni
+operazione al codice che l'ha originata.
 
 Il collegamento tra call stack spoofing e EDR è diretto: poiché l'EDR usa la
 call stack come segnale di attribuzione, un attaccante che controlli ciò che la
 call stack mostra può ridurre la probabilità che un'operazione sospetta venga
 correttamente classificata. Invece di apparire come originata da codice malevolo,
-l'azione risulta attribuita a una libreria di sistema legittima e viene trattata come benigna dall'EDR.
+l'azione risulta attribuita a una libreria di sistema legittima e viene trattata
+come benigna dall'EDR.
 
-% ── Threat Model ──────────────────────────────────────────────────────────────
+% ── Motivazione e Contesto ────────────────────────────────────────────────────
 
-\section{Threat Model}
-\label{sec:threat-model}
+\section{Motivazione e Contesto}
+\label{sec:motivazione}
 
 Un caso emblematico è il \emph{worm}: una volta ottenuta l'esecuzione su un
 sistema enterprise, deve allocare memoria eseguibile in altri processi, accedere
@@ -41,17 +65,18 @@ spoofing consente al worm di eseguire queste stesse operazioni facendo apparire
 ogni chiamata sensibile come originata da codice di sistema, riducendo la
 superficie di rilevamento senza modificare il comportamento funzionale.
 
-Il threat model di questo elaborato è il seguente: l'attore è un operatore di ransomware. Ha già ottenuto l'esecuzione iniziale su un
-endpoint enterprise tramite tecniche esterne allo scope di questo elaborato
-(phishing, sfruttamento di vulnerabilità, compromissione della supply chain).
-L'obiettivo successivo è eseguire operazioni ad alto rischio: movimento
-laterale, escalation di privilegi, esfiltrazione di dati, deployment del payload
-finale, mentre l'EDR è attivo. Poiché l'ambiente enterprise garantisce la
-presenza di un EDR per requisito normativo, la capacità di ridurne la visibilità
-è un vantaggio operativo concreto per l'attaccante. Il contesto consumer privo di EDR per default non è rilevante per queste tecniche: senza uno
-strumento che ispeziona la call stack, non c'è nulla da ingannare.
+Il contesto di questo elaborato è il seguente: l'attore è un operatore di
+ransomware che ha già ottenuto l'esecuzione iniziale su un endpoint enterprise
+tramite tecniche esterne allo scope di questo elaborato (phishing, sfruttamento
+di vulnerabilità, compromissione della supply chain). L'obiettivo successivo è
+eseguire operazioni ad alto rischio --- movimento laterale, escalation di
+privilegi, esfiltrazione di dati, deployment del payload finale --- mentre
+l'EDR è attivo. Poiché l'ambiente enterprise garantisce la presenza di un EDR
+per requisito normativo, la capacità di ridurne la visibilità è un vantaggio
+operativo concreto per l'attaccante. Il contesto consumer privo di EDR per
+default non è rilevante per queste tecniche: senza uno strumento che ispeziona
+la call stack, non c'è nulla da ingannare.
 
 Questo elaborato documenta empiricamente come le tecniche di call stack spoofing
 si adattino all'architettura ARM64 su Windows~11 e misura il loro effetto sulla
-visibilità degli strumenti di analisi stack, con CrowdStrike Falcon
-come strumento difensivo di riferimento nel laboratorio.
+visibilità degli strumenti di analisi stack.
