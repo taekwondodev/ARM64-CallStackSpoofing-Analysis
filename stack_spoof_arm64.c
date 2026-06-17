@@ -23,14 +23,14 @@
  * Misuse of this code may violate laws and regulations.
  */
 
+#include <windows.h>
+#include <winternl.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <tlhelp32.h>
-#include <windows.h>
-#include <winternl.h>
 
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "ntdll.lib")
