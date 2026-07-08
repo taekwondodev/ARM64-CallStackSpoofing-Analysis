@@ -345,8 +345,7 @@ syscall, indipendentemente da qualsiasi manipolazione eseguita in precedenza.
 \label{sec:ambiente}
 
 Il laboratorio simula le operazioni di evasione di un worm già in esecuzione
-sul sistema target: \texttt{stack\_spoof.exe} invoca funzioni di sistema monitorate dagli stack walker (chiamata a funzione arbitraria negli scenari 1--3 e creazione di un processo nello scenario~5), applicando le tecniche di spoofing descritte nei
-cinque scenari. Il meccanismo di auto-replicazione non è oggetto di questo
+sul sistema target: \texttt{stack\_spoof.exe} invoca funzioni di sistema monitorate dagli stack walker, applicando le tecniche di spoofing descritte nel capitolo~\ref{ch:scenari}. Il meccanismo di auto-replicazione non è oggetto di questo
 laboratorio: l'analisi è concentrata esclusivamente sulle tecniche di evasione
 dal rilevamento degli stack walker user-mode.
 
@@ -387,14 +386,6 @@ Gli strumenti impiegati sono WinDbg, System Informer
 e \texttt{Capture\-Stack\-Back\-Trace}; il meccanismo di ciascuno
 è descritto nella Sezione~\ref{sec:strumenti} del
 Capitolo~\ref{ch:scenari}.
-
-\paragraph{Strumento di difesa.}
-CrowdStrike Falcon è la soluzione EDR enterprise impiegata nel
-laboratorio come strumento di difesa contro il call stack spoofing. Opera
-tramite sensori kernel-mode e fornisce la prospettiva del difensore sui
-comportamenti rilevati durante l'esecuzione dei quattro scenari. Il suo
-funzionamento e i risultati dell'analisi sono trattati nel
-Capitolo~\ref{ch:difensiva}.
 
 \paragraph{Ottenere il worm simulato.}
 Nella directory esclusa da Defender:

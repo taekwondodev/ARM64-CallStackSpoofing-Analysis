@@ -5,15 +5,10 @@ Il capitolo analizza le tecniche di call stack spoofing applicate a una
 funzione di iniezione di codice in un processo di sistema. La funzione bersaglio
 è \texttt{InjectExplorer}: una catena API che esegue iniezione di memoria su
 \texttt{explorer.exe} tramite \texttt{OpenProcess}, \texttt{VirtualAllocEx},
-\texttt{WriteProcessMemory} e \texttt{CreateRemoteThread}. A differenza delle
-funzioni simboliche impiegate nel codice originale di Hagenah
-(\texttt{SecretFunction} e \texttt{LaunchNotepad}), questa catena costituisce
-un segnale comportamentale riconoscibile dagli EDR: non è il contenuto del
-payload a essere rilevato, ma il \emph{pattern} di chiamate API che lo porta
-all'esecuzione.
+\texttt{WriteProcessMemory} e \texttt{CreateRemoteThread}.
 
-La baseline e le due tecniche di spoofing documentano come la medesima
-operazione offensiva appare agli strumenti di analisi dello stack in funzione
+La baseline e le due tecniche di spoofing documentano come
+l'operazione offensiva appare agli strumenti di analisi dello stack in funzione
 della tecnica impiegata, dal ground truth della chiamata diretta alla completa
 evasione tramite stack pivot.
 
