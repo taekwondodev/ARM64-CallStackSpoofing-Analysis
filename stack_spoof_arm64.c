@@ -62,29 +62,6 @@ extern DWORD64 SpoofCallStack(void *targetFunc, void *spoofedReturn,
                               void *parameter, void **realReturnStorage);
 
 /**
- * @brief Executes a function with multiple spoofed stack frames
- * @param targetFunc Target function to execute
- * @param spoofChain Array of spoofed return addresses
- * @param parameter Parameter to pass to target function
- * @param chainDepth Number of frames to spoof (1-4)
- * @return Result from target function
- */
-extern DWORD64 SpoofCallStackAdvanced(void *targetFunc, void **spoofChain,
-                                      void *parameter, DWORD chainDepth);
-
-/**
- * @brief Gets the current stack pointer value
- * @return Current SP register value
- */
-extern void *GetCurrentStackPointer(void);
-
-/**
- * @brief Gets the current frame pointer value
- * @return Current FP (x29) register value
- */
-extern void *GetCurrentFramePointer(void);
-
-/**
  * @brief Executes a function on an isolated stack
  * @param targetFunc Target function to execute
  * @param fakeFrameData Structure containing fake stack context
